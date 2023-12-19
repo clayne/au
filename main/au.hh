@@ -24,7 +24,7 @@
 #include <type_traits>
 #include <utility>
 
-// Version identifier: 0.3.3-29-ga831130
+// Version identifier: 0.3.3-31-g7d8a544
 // <iostream> support: INCLUDED
 // List of included units:
 //   amperes
@@ -1712,7 +1712,7 @@ namespace detail {
 enum class MagRepresentationOutcome {
     OK,
     ERR_NON_INTEGER_IN_INTEGER_TYPE,
-    ERR_RATIONAL_POWERS,
+    ERR_INVALID_ROOT,
     ERR_CANNOT_FIT,
 };
 
@@ -1758,10 +1758,101 @@ constexpr MagRepresentationOrError<T> checked_int_pow(T base, std::uintmax_t exp
     return result;
 }
 
-template <typename T, std::intmax_t N, typename B>
+template <typename T>
+constexpr MagRepresentationOrError<T> root(T x, std::uintmax_t n) {
+    // The "zeroth root" would be mathematically undefined.
+    if (n == 0) {
+        return {MagRepresentationOutcome::ERR_INVALID_ROOT};
+    }
+
+    // The "first root" is trivial.
+    if (n == 1) {
+        return {MagRepresentationOutcome::OK, x};
+    }
+
+    // We only support nontrivial roots of floating point types.
+    if (!std::is_floating_point<T>::value) {
+        return {MagRepresentationOutcome::ERR_NON_INTEGER_IN_INTEGER_TYPE};
+    }
+
+    // Handle negative numbers: only odd roots are allowed.
+    if (x < 0) {
+        if (n % 2 == 0) {
+            return {MagRepresentationOutcome::ERR_INVALID_ROOT};
+        } else {
+            const auto negative_result = root(-x, n);
+            if (negative_result.outcome != MagRepresentationOutcome::OK) {
+                return {negative_result.outcome};
+            }
+            return {MagRepresentationOutcome::OK, static_cast<T>(-negative_result.value)};
+        }
+    }
+
+    // Handle special cases of zero and one.
+    if (x == 0 || x == 1) {
+        return {MagRepresentationOutcome::OK, x};
+    }
+
+    // Handle numbers bewtween 0 and 1.
+    if (x < 1) {
+        const auto inverse_result = root(T{1} / x, n);
+        if (inverse_result.outcome != MagRepresentationOutcome::OK) {
+            return {inverse_result.outcome};
+        }
+        return {MagRepresentationOutcome::OK, static_cast<T>(T{1} / inverse_result.value)};
+    }
+
+    //
+    // At this point, error conditions are finished, and we can proceed with the "core" algorithm.
+    //
+
+    // Always use `long double` for intermediate computations.  We don't ever expect people to be
+    // calling this at runtime, so we want maximum accuracy.
+    long double lo = 1.0;
+    long double hi = x;
+
+    // Do a binary search to find the closest value such that `checked_int_pow` recovers the input.
+    //
+    // Because we know `n > 1`, and `x > 1`, and x^n is monotonically increasing, we know that
+    // `checked_int_pow(lo, n) < x < checked_int_pow(hi, n)`.  We will preserve this as an
+    // invariant.
+    while (lo < hi) {
+        long double mid = lo + (hi - lo) / 2;
+
+        auto result = checked_int_pow(mid, n);
+
+        if (result.outcome != MagRepresentationOutcome::OK) {
+            return {result.outcome};
+        }
+
+        // Early return if we get lucky with an exact answer.
+        if (result.value == x) {
+            return {MagRepresentationOutcome::OK, static_cast<T>(mid)};
+        }
+
+        // Check for stagnation.
+        if (mid == lo || mid == hi) {
+            break;
+        }
+
+        // Preserve the invariant that `checked_int_pow(lo, n) < x < checked_int_pow(hi, n)`.
+        if (result.value < x) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+
+    // Pick whichever one gets closer to the target.
+    const auto lo_diff = x - checked_int_pow(lo, n).value;
+    const auto hi_diff = checked_int_pow(hi, n).value - x;
+    return {MagRepresentationOutcome::OK, static_cast<T>(lo_diff < hi_diff ? lo : hi)};
+}
+
+template <typename T, std::intmax_t N, std::uintmax_t D, typename B>
 constexpr MagRepresentationOrError<Widen<T>> base_power_value(B base) {
     if (N < 0) {
-        const auto inverse_result = base_power_value<T, -N>(base);
+        const auto inverse_result = base_power_value<T, -N, D>(base);
         if (inverse_result.outcome != MagRepresentationOutcome::OK) {
             return inverse_result;
         }
@@ -1771,7 +1862,12 @@ constexpr MagRepresentationOrError<Widen<T>> base_power_value(B base) {
         };
     }
 
-    return checked_int_pow(static_cast<Widen<T>>(base), static_cast<std::uintmax_t>(N));
+    const auto power_result =
+        checked_int_pow(static_cast<Widen<T>>(base), static_cast<std::uintmax_t>(N));
+    if (power_result.outcome != MagRepresentationOutcome::OK) {
+        return {power_result.outcome};
+    }
+    return (D > 1) ? root(power_result.value, D) : power_result;
 }
 
 template <typename T, std::size_t N>
@@ -1835,15 +1931,10 @@ constexpr MagRepresentationOrError<T> get_value_result(Magnitude<BPs...>) {
         return {MagRepresentationOutcome::ERR_NON_INTEGER_IN_INTEGER_TYPE};
     }
 
-    // Computing values for rational base powers is something we would _like_ to support, but we
-    // need a `constexpr` implementation of `powl()` first.
-    if (!all({(ExpT<BPs>::den == 1)...})) {
-        return {MagRepresentationOutcome::ERR_RATIONAL_POWERS};
-    }
-
     // Force the expression to be evaluated in a constexpr context.
     constexpr auto widened_result =
-        product({base_power_value<T, (ExpT<BPs>::num / ExpT<BPs>::den)>(BaseT<BPs>::value())...});
+        product({base_power_value<T, ExpT<BPs>::num, static_cast<std::uintmax_t>(ExpT<BPs>::den)>(
+            BaseT<BPs>::value())...});
 
     if ((widened_result.outcome != MagRepresentationOutcome::OK) ||
         !safe_to_cast_to<T>(widened_result.value)) {
@@ -1875,8 +1966,8 @@ constexpr T get_value(Magnitude<BPs...> m) {
 
     static_assert(result.outcome != MagRepresentationOutcome::ERR_NON_INTEGER_IN_INTEGER_TYPE,
                   "Cannot represent non-integer in integral destination type");
-    static_assert(result.outcome != MagRepresentationOutcome::ERR_RATIONAL_POWERS,
-                  "Computing values for rational powers not yet supported");
+    static_assert(result.outcome != MagRepresentationOutcome::ERR_INVALID_ROOT,
+                  "Could not compute root for rational power of base");
     static_assert(result.outcome != MagRepresentationOutcome::ERR_CANNOT_FIT,
                   "Value outside range of destination type");
 
@@ -1958,202 +2049,234 @@ struct CommonMagnitude<Zero, Zero> : stdx::type_identity<Zero> {};
 }  // namespace  au
 
 
+
+// This file exists to analyze one single calculation: `x * N / D`, where `x` is
+// some integral type, and `N` and `D` are the numerator and denominator of a
+// rational magnitude (and hence, are automatically in lowest terms),
+// represented in that same type.  We want to answer one single question: will
+// this calculation overflow at any stage?
+//
+// Importantly, we need to produce correct answers even when `N` and/or `D`
+// _cannot be represented_ in that type (because they would overflow).  We also
+// need to handle subtleties around integer promotion, where the type of `x * x`
+// can be different from the type of `x` when those types are small.
+//
+// The goal for the final solution we produce is to be as fast and efficient as
+// the best such function that an expert C++ engineer could produce by hand, for
+// every combination of integral type and numerator and denominator magnitudes.
+
 namespace au {
 namespace detail {
 
-// The various categories by which a magnitude can be applied to a numeric quantity.
-enum class ApplyAs {
-    INTEGER_MULTIPLY,
-    INTEGER_DIVIDE,
-    RATIONAL_MULTIPLY,
-    IRRATIONAL_MULTIPLY,
+////////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// `PromotedType<T>` is the result type for arithmetic operations involving `T`.  Of course, this is
+// normally just `T`, but integer promotion for small integral types can change this.
+//
+template <typename T>
+struct PromotedTypeImpl {
+    using type = decltype(std::declval<T>() * std::declval<T>());
+
+    static_assert(std::is_same<type, typename PromotedTypeImpl<type>::type>::value,
+                  "We explicitly assume that promoted types are not again promotable");
 };
+template <typename T>
+using PromotedType = typename PromotedTypeImpl<T>::type;
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// `clamp_to_range_of<T>(x)` returns `x` if it is in the range of `T`, and otherwise returns the
+// maximum value representable in `T` if `x` is too large, or the minimum value representable in `T`
+// if `x` is too small.
+//
+
+template <typename T, typename U>
+constexpr T clamp_to_range_of(U x) {
+    return stdx::cmp_greater(x, std::numeric_limits<T>::max())
+               ? std::numeric_limits<T>::max()
+               : (stdx::cmp_less(x, std::numeric_limits<T>::lowest())
+                      ? std::numeric_limits<T>::lowest()
+                      : static_cast<T>(x));
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// `is_known_to_be_less_than_one(MagT)` is true if the magnitude `MagT` is purely rational; its
+// numerator is representable in `std::uintmax_t`; and, it is less than 1.
+//
 
 template <typename... BPs>
-constexpr ApplyAs categorize_magnitude(Magnitude<BPs...>) {
-    if (IsInteger<Magnitude<BPs...>>::value) {
-        return ApplyAs::INTEGER_MULTIPLY;
-    }
+constexpr bool is_known_to_be_less_than_one(Magnitude<BPs...> m) {
+    using MagT = Magnitude<BPs...>;
+    static_assert(is_rational(m), "Magnitude must be rational");
 
-    if (IsInteger<MagInverseT<Magnitude<BPs...>>>::value) {
-        return ApplyAs::INTEGER_DIVIDE;
-    }
+    constexpr auto num_result = get_value_result<std::uintmax_t>(numerator(MagT{}));
+    static_assert(num_result.outcome == MagRepresentationOutcome::OK,
+                  "Magnitude must be representable in std::uintmax_t");
 
-    return IsRational<Magnitude<BPs...>>::value ? ApplyAs::RATIONAL_MULTIPLY
-                                                : ApplyAs::IRRATIONAL_MULTIPLY;
+    constexpr auto den_result = get_value_result<std::uintmax_t>(denominator(MagT{}));
+    static_assert(
+        den_result.outcome == MagRepresentationOutcome::OK ||
+            den_result.outcome == MagRepresentationOutcome::ERR_CANNOT_FIT,
+        "Magnitude must either be representable in std::uintmax_t, or fail due to overflow");
+
+    return den_result.outcome == MagRepresentationOutcome::OK ? num_result.value < den_result.value
+                                                              : true;
 }
 
-template <typename Mag, ApplyAs Category, typename T, bool is_T_integral>
-struct ApplyMagnitudeImpl;
+////////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// `MaxNonOverflowingValue<T, MagT>` is the maximum value of type `T` that can have `MagT` applied
+// as numerator-and-denominator without overflowing.  We require that `T` is some integral
+// arithmetic type, and that `MagT` is a rational magnitude that is neither purely integral nor
+// purely inverse-integral.
+//
+// If you are trying to understand these helpers, we suggest starting at the bottom with
+// `MaxNonOverflowingValue`, and reading upwards.
+//
 
-template <typename T, bool IsMagnitudeValid>
-struct OverflowChecker {
-    // Default case: `IsMagnitudeValid` is true.
-    static constexpr bool would_product_overflow(T x, T mag_value) {
-        return (x > (std::numeric_limits<T>::max() / mag_value)) ||
-               (x < (std::numeric_limits<T>::lowest() / mag_value));
+//
+// Branch based on whether `MagT` is less than 1.
+//
+template <typename T, typename MagT, bool IsMagLessThanOne>
+struct MaxNonOverflowingValueImplWhenNumFits;
+
+// If `MagT` is less than 1, then we only need to check for the limiting value where the _numerator
+// multiplication step alone_ would overflow.
+template <typename T, typename MagT>
+struct MaxNonOverflowingValueImplWhenNumFits<T, MagT, true> {
+    using P = PromotedType<T>;
+
+    static constexpr T value() {
+        return clamp_to_range_of<T>(std::numeric_limits<P>::max() /
+                                    get_value<P>(numerator(MagT{})));
     }
 };
 
-template <typename T>
-struct OverflowChecker<T, false> {
-    // Specialization for when `IsMagnitudeValid` is false.
-    //
-    // This means that the magnitude itself could not fit inside of the type; therefore, the only
-    // possible value that would not overflow is zero.
-    static constexpr bool would_product_overflow(T x, T) { return (x != T{0}); }
-};
+// If `MagT` is greater than 1, then we have two opportunities for overflow: the numerator
+// multiplication step can overflow the promoted type; or, the denominator division step can fail to
+// restore it to the original type's range.
+template <typename T, typename MagT>
+struct MaxNonOverflowingValueImplWhenNumFits<T, MagT, false> {
+    using P = PromotedType<T>;
 
-template <typename T, bool IsTIntegral>
-struct TruncationCheckerIfMagnitudeValid {
-    // Default case: T is integral.
-    static_assert(std::is_integral<T>::value && IsTIntegral,
-                  "Mismatched instantiation (should never be done manually)");
-
-    static constexpr bool would_truncate(T x, T mag_value) { return (x % mag_value != T{0}); }
-};
-
-template <typename T>
-struct TruncationCheckerIfMagnitudeValid<T, false> {
-    // Specialization for when T is not integral: by convention, assume no truncation for floats.
-    static_assert(!std::is_integral<T>::value,
-                  "Mismatched instantiation (should never be done manually)");
-    static constexpr bool would_truncate(T, T) { return false; }
-};
-
-template <typename T, bool IsMagnitudeValid>
-// Default case: `IsMagnitudeValid` is true.
-struct TruncationChecker : TruncationCheckerIfMagnitudeValid<T, std::is_integral<T>::value> {
-    static_assert(IsMagnitudeValid, "Mismatched instantiation (should never be done manually)");
-};
-
-template <typename T>
-struct TruncationChecker<T, false> {
-    // Specialization for when `IsMagnitudeValid` is false.
-    //
-    // This means that the magnitude itself could not fit inside of the type; therefore, the only
-    // possible value that would not truncate is zero.
-    static constexpr bool would_truncate(T x, T) { return (x != T{0}); }
-};
-
-// Multiplying by an integer, for any type T.
-template <typename Mag, typename T, bool is_T_integral>
-struct ApplyMagnitudeImpl<Mag, ApplyAs::INTEGER_MULTIPLY, T, is_T_integral> {
-    static_assert(categorize_magnitude(Mag{}) == ApplyAs::INTEGER_MULTIPLY,
-                  "Mismatched instantiation (should never be done manually)");
-    static_assert(is_T_integral == std::is_integral<T>::value,
-                  "Mismatched instantiation (should never be done manually)");
-
-    constexpr T operator()(const T &x) { return x * get_value<T>(Mag{}); }
-
-    static constexpr bool would_overflow(const T &x) {
-        constexpr auto mag_value_result = get_value_result<T>(Mag{});
-        return OverflowChecker<T, mag_value_result.outcome == MagRepresentationOutcome::OK>::
-            would_product_overflow(x, mag_value_result.value);
-    }
-
-    static constexpr bool would_truncate(const T &) { return false; }
-};
-
-// Dividing by an integer, for any type T.
-template <typename Mag, typename T, bool is_T_integral>
-struct ApplyMagnitudeImpl<Mag, ApplyAs::INTEGER_DIVIDE, T, is_T_integral> {
-    static_assert(categorize_magnitude(Mag{}) == ApplyAs::INTEGER_DIVIDE,
-                  "Mismatched instantiation (should never be done manually)");
-    static_assert(is_T_integral == std::is_integral<T>::value,
-                  "Mismatched instantiation (should never be done manually)");
-
-    constexpr T operator()(const T &x) { return x / get_value<T>(MagInverseT<Mag>{}); }
-
-    static constexpr bool would_overflow(const T &) { return false; }
-
-    static constexpr bool would_truncate(const T &x) {
-        constexpr auto mag_value_result = get_value_result<T>(MagInverseT<Mag>{});
-        return TruncationChecker<T, mag_value_result.outcome == MagRepresentationOutcome::OK>::
-            would_truncate(x, mag_value_result.value);
+    static constexpr T value() {
+        constexpr auto num = get_value<P>(numerator(MagT{}));
+        constexpr auto den = get_value<P>(denominator(MagT{}));
+        constexpr auto t_max = std::numeric_limits<T>::max();
+        constexpr auto p_max = std::numeric_limits<P>::max();
+        constexpr auto limit_to_avoid = (den > p_max / t_max) ? p_max : t_max * den;
+        return clamp_to_range_of<T>(limit_to_avoid / num);
     }
 };
 
-// Applying a (non-integer, non-inverse-integer) rational, for any integral type T.
-template <typename Mag, typename T>
-struct ApplyMagnitudeImpl<Mag, ApplyAs::RATIONAL_MULTIPLY, T, true> {
-    static_assert(categorize_magnitude(Mag{}) == ApplyAs::RATIONAL_MULTIPLY,
-                  "Mismatched instantiation (should never be done manually)");
-    static_assert(std::is_integral<T>::value,
-                  "Mismatched instantiation (should never be done manually)");
+//
+// Branch based on whether the numerator of `MagT` can fit in the promoted type of `T`.
+//
+template <typename T, typename MagT, MagRepresentationOutcome NumOutcome>
+struct MaxNonOverflowingValueImpl;
 
-    constexpr T operator()(const T &x) {
-        return x * get_value<T>(numerator(Mag{})) / get_value<T>(denominator(Mag{}));
-    }
+// If the numerator fits in the promoted type of `T`, delegate further based on whether the
+// denominator is bigger.
+template <typename T, typename MagT>
+struct MaxNonOverflowingValueImpl<T, MagT, MagRepresentationOutcome::OK>
+    : MaxNonOverflowingValueImplWhenNumFits<T, MagT, is_known_to_be_less_than_one(MagT{})> {};
 
-    static constexpr bool would_overflow(const T &x) {
-        constexpr auto mag_value_result = get_value_result<T>(numerator(Mag{}));
-        return OverflowChecker<T, mag_value_result.outcome == MagRepresentationOutcome::OK>::
-            would_product_overflow(x, mag_value_result.value);
-    }
-
-    static constexpr bool would_truncate(const T &x) {
-        constexpr auto mag_value_result = get_value_result<T>(denominator(Mag{}));
-        return TruncationChecker<T, mag_value_result.outcome == MagRepresentationOutcome::OK>::
-            would_truncate(x, mag_value_result.value);
-    }
-};
-
-// Applying a (non-integer, non-inverse-integer) rational, for any non-integral type T.
-template <typename Mag, typename T>
-struct ApplyMagnitudeImpl<Mag, ApplyAs::RATIONAL_MULTIPLY, T, false> {
-    static_assert(categorize_magnitude(Mag{}) == ApplyAs::RATIONAL_MULTIPLY,
-                  "Mismatched instantiation (should never be done manually)");
-    static_assert(!std::is_integral<T>::value,
-                  "Mismatched instantiation (should never be done manually)");
-
-    constexpr T operator()(const T &x) { return x * get_value<T>(Mag{}); }
-
-    static constexpr bool would_overflow(const T &x) {
-        constexpr auto mag_value_result = get_value_result<T>(Mag{});
-        return OverflowChecker<T, mag_value_result.outcome == MagRepresentationOutcome::OK>::
-            would_product_overflow(x, mag_value_result.value);
-    }
-
-    static constexpr bool would_truncate(const T &) { return false; }
-};
-
-// Applying an irrational for any type T (although only non-integral T makes sense).
-template <typename Mag, typename T, bool is_T_integral>
-struct ApplyMagnitudeImpl<Mag, ApplyAs::IRRATIONAL_MULTIPLY, T, is_T_integral> {
-    static_assert(!std::is_integral<T>::value, "Cannot apply irrational magnitude to integer type");
-
-    static_assert(categorize_magnitude(Mag{}) == ApplyAs::IRRATIONAL_MULTIPLY,
-                  "Mismatched instantiation (should never be done manually)");
-    static_assert(is_T_integral == std::is_integral<T>::value,
-                  "Mismatched instantiation (should never be done manually)");
-
-    constexpr T operator()(const T &x) { return x * get_value<T>(Mag{}); }
-
-    static constexpr bool would_overflow(const T &x) {
-        constexpr auto mag_value_result = get_value_result<T>(Mag{});
-        return OverflowChecker<T, mag_value_result.outcome == MagRepresentationOutcome::OK>::
-            would_product_overflow(x, mag_value_result.value);
-    }
-
-    static constexpr bool would_truncate(const T &) { return false; }
+// If `MagT` can't be represented in the promoted type of `T`, then the result is 0.
+template <typename T, typename MagT>
+struct MaxNonOverflowingValueImpl<T, MagT, MagRepresentationOutcome::ERR_CANNOT_FIT> {
+    static constexpr T value() { return T{0}; }
 };
 
 template <typename T, typename MagT>
-struct ApplyMagnitudeType;
-template <typename T, typename MagT>
-using ApplyMagnitudeT = typename ApplyMagnitudeType<T, MagT>::type;
-template <typename T, typename... BPs>
-struct ApplyMagnitudeType<T, Magnitude<BPs...>>
-    : stdx::type_identity<ApplyMagnitudeImpl<Magnitude<BPs...>,
-                                             categorize_magnitude(Magnitude<BPs...>{}),
-                                             T,
-                                             std::is_integral<T>::value>> {};
+struct ValidateTypeAndMagnitude {
+    static_assert(std::is_integral<T>::value, "Only designed for integral types");
+    static_assert(is_rational(MagT{}), "Magnitude must be rational");
+    static_assert(!is_integer(MagT{}), "Magnitude must not be purely integral");
+    static_assert(!is_integer(inverse(MagT{})), "Magnitude must not be purely inverse-integral");
+};
 
-template <typename T, typename... BPs>
-constexpr T apply_magnitude(const T &x, Magnitude<BPs...>) {
-    return ApplyMagnitudeT<T, Magnitude<BPs...>>{}(x);
-}
+template <typename T, typename MagT>
+struct MaxNonOverflowingValue
+    : ValidateTypeAndMagnitude<T, MagT>,
+      MaxNonOverflowingValueImpl<T,
+                                 MagT,
+                                 get_value_result<PromotedType<T>>(numerator(MagT{})).outcome> {};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// `MinNonOverflowingValue<T, MagT>` is the minimum (i.e., most-negative) value of type `T` that can
+// have `MagT` applied as numerator-and-denominator without overflowing (i.e., becoming too-negative
+// to represent).  We require that `T` is some integral arithmetic type, and that `MagT` is a
+// rational magnitude that is neither purely integral nor purely inverse-integral.
+//
+// If you are trying to understand these helpers, we suggest starting at the bottom with
+// `MinNonOverflowingValue`, and reading upwards.
+//
+
+//
+// Branch based on whether `MagT` is less than 1.
+//
+template <typename T, typename MagT, bool IsMagLessThanOne>
+struct MinNonOverflowingValueImplWhenNumFits;
+
+// If `MagT` is less than 1, then we only need to check for the limiting value where the _numerator
+// multiplication step alone_ would overflow.
+template <typename T, typename MagT>
+struct MinNonOverflowingValueImplWhenNumFits<T, MagT, true> {
+    using P = PromotedType<T>;
+
+    static constexpr T value() {
+        return clamp_to_range_of<T>(std::numeric_limits<P>::lowest() /
+                                    get_value<P>(numerator(MagT{})));
+    }
+};
+
+// If `MagT` is greater than 1, then we have two opportunities for overflow: the numerator
+// multiplication step can overflow the promoted type; or, the denominator division step can fail to
+// restore it to the original type's range.
+template <typename T, typename MagT>
+struct MinNonOverflowingValueImplWhenNumFits<T, MagT, false> {
+    using P = PromotedType<T>;
+
+    static constexpr T value() {
+        constexpr auto num = get_value<P>(numerator(MagT{}));
+        constexpr auto den = get_value<P>(denominator(MagT{}));
+        constexpr auto t_min = std::numeric_limits<T>::lowest();
+        constexpr auto p_min = std::numeric_limits<P>::lowest();
+        constexpr auto limit_to_avoid = (den > p_min / t_min) ? p_min : t_min * den;
+        return clamp_to_range_of<T>(limit_to_avoid / num);
+    }
+};
+
+//
+// Branch based on whether the denominator of `MagT` can fit in the promoted type of `T`.
+//
+template <typename T, typename MagT, MagRepresentationOutcome NumOutcome>
+struct MinNonOverflowingValueImpl;
+
+// If the numerator fits in the promoted type of `T`, delegate further based on whether the
+// denominator is bigger.
+template <typename T, typename MagT>
+struct MinNonOverflowingValueImpl<T, MagT, MagRepresentationOutcome::OK>
+    : MinNonOverflowingValueImplWhenNumFits<T, MagT, is_known_to_be_less_than_one(MagT{})> {};
+
+// If the numerator can't be represented in the promoted type of `T`, then the result is 0.
+template <typename T, typename MagT>
+struct MinNonOverflowingValueImpl<T, MagT, MagRepresentationOutcome::ERR_CANNOT_FIT> {
+    static constexpr T value() { return T{0}; }
+};
+
+template <typename T, typename MagT>
+struct MinNonOverflowingValue
+    : ValidateTypeAndMagnitude<T, MagT>,
+      MinNonOverflowingValueImpl<T,
+                                 MagT,
+                                 get_value_result<PromotedType<T>>(numerator(MagT{})).outcome> {
+    static_assert(std::is_signed<T>::value, "Only designed for signed types");
+    static_assert(std::is_signed<PromotedType<T>>::value,
+                  "We assume the promoted type is also signed");
+};
 
 }  // namespace detail
 }  // namespace au
@@ -3091,6 +3214,229 @@ struct ConstructionPolicy {
             detail::PermitAsCarveOutForIntegerPromotion<Rep, ScaleFactor<SourceUnit>, SourceRep>>>;
 };
 
+}  // namespace au
+
+
+namespace au {
+namespace detail {
+
+// The various categories by which a magnitude can be applied to a numeric quantity.
+enum class ApplyAs {
+    INTEGER_MULTIPLY,
+    INTEGER_DIVIDE,
+    RATIONAL_MULTIPLY,
+    IRRATIONAL_MULTIPLY,
+};
+
+template <typename... BPs>
+constexpr ApplyAs categorize_magnitude(Magnitude<BPs...>) {
+    if (IsInteger<Magnitude<BPs...>>::value) {
+        return ApplyAs::INTEGER_MULTIPLY;
+    }
+
+    if (IsInteger<MagInverseT<Magnitude<BPs...>>>::value) {
+        return ApplyAs::INTEGER_DIVIDE;
+    }
+
+    return IsRational<Magnitude<BPs...>>::value ? ApplyAs::RATIONAL_MULTIPLY
+                                                : ApplyAs::IRRATIONAL_MULTIPLY;
+}
+
+template <typename Mag, ApplyAs Category, typename T, bool is_T_integral>
+struct ApplyMagnitudeImpl;
+
+template <typename T, bool IsMagnitudeValid>
+struct OverflowChecker {
+    // Default case: `IsMagnitudeValid` is true.
+    static constexpr bool would_product_overflow(T x, T mag_value) {
+        return (x > (std::numeric_limits<T>::max() / mag_value)) ||
+               (x < (std::numeric_limits<T>::lowest() / mag_value));
+    }
+};
+
+template <typename T>
+struct OverflowChecker<T, false> {
+    // Specialization for when `IsMagnitudeValid` is false.
+    //
+    // This means that the magnitude itself could not fit inside of the type; therefore, the only
+    // possible value that would not overflow is zero.
+    static constexpr bool would_product_overflow(T x, T) { return (x != T{0}); }
+};
+
+template <typename T, bool IsTIntegral>
+struct TruncationCheckerIfMagnitudeValid {
+    // Default case: T is integral.
+    static_assert(std::is_integral<T>::value && IsTIntegral,
+                  "Mismatched instantiation (should never be done manually)");
+
+    static constexpr bool would_truncate(T x, T mag_value) { return (x % mag_value != T{0}); }
+};
+
+template <typename T>
+struct TruncationCheckerIfMagnitudeValid<T, false> {
+    // Specialization for when T is not integral: by convention, assume no truncation for floats.
+    static_assert(!std::is_integral<T>::value,
+                  "Mismatched instantiation (should never be done manually)");
+    static constexpr bool would_truncate(T, T) { return false; }
+};
+
+template <typename T, bool IsMagnitudeValid>
+// Default case: `IsMagnitudeValid` is true.
+struct TruncationChecker : TruncationCheckerIfMagnitudeValid<T, std::is_integral<T>::value> {
+    static_assert(IsMagnitudeValid, "Mismatched instantiation (should never be done manually)");
+};
+
+template <typename T>
+struct TruncationChecker<T, false> {
+    // Specialization for when `IsMagnitudeValid` is false.
+    //
+    // This means that the magnitude itself could not fit inside of the type; therefore, the only
+    // possible value that would not truncate is zero.
+    static constexpr bool would_truncate(T x, T) { return (x != T{0}); }
+};
+
+// Multiplying by an integer, for any type T.
+template <typename Mag, typename T, bool is_T_integral>
+struct ApplyMagnitudeImpl<Mag, ApplyAs::INTEGER_MULTIPLY, T, is_T_integral> {
+    static_assert(categorize_magnitude(Mag{}) == ApplyAs::INTEGER_MULTIPLY,
+                  "Mismatched instantiation (should never be done manually)");
+    static_assert(is_T_integral == std::is_integral<T>::value,
+                  "Mismatched instantiation (should never be done manually)");
+
+    constexpr T operator()(const T &x) { return x * get_value<T>(Mag{}); }
+
+    static constexpr bool would_overflow(const T &x) {
+        constexpr auto mag_value_result = get_value_result<T>(Mag{});
+        return OverflowChecker<T, mag_value_result.outcome == MagRepresentationOutcome::OK>::
+            would_product_overflow(x, mag_value_result.value);
+    }
+
+    static constexpr bool would_truncate(const T &) { return false; }
+};
+
+// Dividing by an integer, for any type T.
+template <typename Mag, typename T, bool is_T_integral>
+struct ApplyMagnitudeImpl<Mag, ApplyAs::INTEGER_DIVIDE, T, is_T_integral> {
+    static_assert(categorize_magnitude(Mag{}) == ApplyAs::INTEGER_DIVIDE,
+                  "Mismatched instantiation (should never be done manually)");
+    static_assert(is_T_integral == std::is_integral<T>::value,
+                  "Mismatched instantiation (should never be done manually)");
+
+    constexpr T operator()(const T &x) { return x / get_value<T>(MagInverseT<Mag>{}); }
+
+    static constexpr bool would_overflow(const T &) { return false; }
+
+    static constexpr bool would_truncate(const T &x) {
+        constexpr auto mag_value_result = get_value_result<T>(MagInverseT<Mag>{});
+        return TruncationChecker<T, mag_value_result.outcome == MagRepresentationOutcome::OK>::
+            would_truncate(x, mag_value_result.value);
+    }
+};
+
+template <typename T, typename Mag, bool is_T_signed>
+struct RationalOverflowChecker;
+template <typename T, typename Mag>
+struct RationalOverflowChecker<T, Mag, true> {
+    static constexpr bool would_overflow(const T &x) {
+        static_assert(std::is_signed<T>::value,
+                      "Mismatched instantiation (should never be done manually)");
+        const bool safe = (x <= MaxNonOverflowingValue<T, Mag>::value()) &&
+                          (x >= MinNonOverflowingValue<T, Mag>::value());
+        return !safe;
+    }
+};
+template <typename T, typename Mag>
+struct RationalOverflowChecker<T, Mag, false> {
+    static constexpr bool would_overflow(const T &x) {
+        static_assert(!std::is_signed<T>::value,
+                      "Mismatched instantiation (should never be done manually)");
+        const bool safe = (x <= MaxNonOverflowingValue<T, Mag>::value());
+        return !safe;
+    }
+};
+
+// Applying a (non-integer, non-inverse-integer) rational, for any integral type T.
+template <typename Mag, typename T>
+struct ApplyMagnitudeImpl<Mag, ApplyAs::RATIONAL_MULTIPLY, T, true> {
+    static_assert(categorize_magnitude(Mag{}) == ApplyAs::RATIONAL_MULTIPLY,
+                  "Mismatched instantiation (should never be done manually)");
+    static_assert(std::is_integral<T>::value,
+                  "Mismatched instantiation (should never be done manually)");
+
+    constexpr T operator()(const T &x) {
+        using P = PromotedType<T>;
+        return static_cast<T>(x * get_value<P>(numerator(Mag{})) /
+                              get_value<P>(denominator(Mag{})));
+    }
+
+    static constexpr bool would_overflow(const T &x) {
+        return RationalOverflowChecker<T, Mag, std::is_signed<T>::value>::would_overflow(x);
+    }
+
+    static constexpr bool would_truncate(const T &x) {
+        constexpr auto mag_value_result = get_value_result<T>(denominator(Mag{}));
+        return TruncationChecker<T, mag_value_result.outcome == MagRepresentationOutcome::OK>::
+            would_truncate(x, mag_value_result.value);
+    }
+};
+
+// Applying a (non-integer, non-inverse-integer) rational, for any non-integral type T.
+template <typename Mag, typename T>
+struct ApplyMagnitudeImpl<Mag, ApplyAs::RATIONAL_MULTIPLY, T, false> {
+    static_assert(categorize_magnitude(Mag{}) == ApplyAs::RATIONAL_MULTIPLY,
+                  "Mismatched instantiation (should never be done manually)");
+    static_assert(!std::is_integral<T>::value,
+                  "Mismatched instantiation (should never be done manually)");
+
+    constexpr T operator()(const T &x) { return x * get_value<T>(Mag{}); }
+
+    static constexpr bool would_overflow(const T &x) {
+        constexpr auto mag_value_result = get_value_result<T>(Mag{});
+        return OverflowChecker<T, mag_value_result.outcome == MagRepresentationOutcome::OK>::
+            would_product_overflow(x, mag_value_result.value);
+    }
+
+    static constexpr bool would_truncate(const T &) { return false; }
+};
+
+// Applying an irrational for any type T (although only non-integral T makes sense).
+template <typename Mag, typename T, bool is_T_integral>
+struct ApplyMagnitudeImpl<Mag, ApplyAs::IRRATIONAL_MULTIPLY, T, is_T_integral> {
+    static_assert(!std::is_integral<T>::value, "Cannot apply irrational magnitude to integer type");
+
+    static_assert(categorize_magnitude(Mag{}) == ApplyAs::IRRATIONAL_MULTIPLY,
+                  "Mismatched instantiation (should never be done manually)");
+    static_assert(is_T_integral == std::is_integral<T>::value,
+                  "Mismatched instantiation (should never be done manually)");
+
+    constexpr T operator()(const T &x) { return x * get_value<T>(Mag{}); }
+
+    static constexpr bool would_overflow(const T &x) {
+        constexpr auto mag_value_result = get_value_result<T>(Mag{});
+        return OverflowChecker<T, mag_value_result.outcome == MagRepresentationOutcome::OK>::
+            would_product_overflow(x, mag_value_result.value);
+    }
+
+    static constexpr bool would_truncate(const T &) { return false; }
+};
+
+template <typename T, typename MagT>
+struct ApplyMagnitudeType;
+template <typename T, typename MagT>
+using ApplyMagnitudeT = typename ApplyMagnitudeType<T, MagT>::type;
+template <typename T, typename... BPs>
+struct ApplyMagnitudeType<T, Magnitude<BPs...>>
+    : stdx::type_identity<ApplyMagnitudeImpl<Magnitude<BPs...>,
+                                             categorize_magnitude(Magnitude<BPs...>{}),
+                                             T,
+                                             std::is_integral<T>::value>> {};
+
+template <typename T, typename... BPs>
+constexpr T apply_magnitude(const T &x, Magnitude<BPs...>) {
+    return ApplyMagnitudeT<T, Magnitude<BPs...>>{}(x);
+}
+
+}  // namespace detail
 }  // namespace au
 
 
