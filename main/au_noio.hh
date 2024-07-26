@@ -23,7 +23,7 @@
 #include <type_traits>
 #include <utility>
 
-// Version identifier: 0.3.4-17-g542fc7c
+// Version identifier: 0.3.5-1-gdb50c45
 // <iostream> support: EXCLUDED
 // List of included units:
 //   amperes
@@ -1949,7 +1949,7 @@ constexpr MagRepresentationOrError<T> root(T x, std::uintmax_t n) {
     // Always use `long double` for intermediate computations.  We don't ever expect people to be
     // calling this at runtime, so we want maximum accuracy.
     long double lo = 1.0;
-    long double hi = x;
+    long double hi = static_cast<long double>(x);
 
     // Do a binary search to find the closest value such that `checked_int_pow` recovers the input.
     //
