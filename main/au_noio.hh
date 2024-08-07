@@ -23,7 +23,7 @@
 #include <type_traits>
 #include <utility>
 
-// Version identifier: 0.3.5-1-gdb50c45
+// Version identifier: 0.3.5-8-g52b93f4
 // <iostream> support: EXCLUDED
 // List of included units:
 //   amperes
@@ -3877,7 +3877,7 @@ class Quantity {
     }
     template <typename T, typename = std::enable_if_t<IsQuotientValidRep<T, RepT>::value>>
     friend constexpr auto operator/(T s, Quantity a) {
-        warn_if_integer_division<T>();
+        warn_if_integer_division<UnitProductT<>, T>();
         return make_quantity<decltype(pow<-1>(unit))>(s / a.value_);
     }
 
@@ -3891,7 +3891,7 @@ class Quantity {
     // Division for dimensioned quantities.
     template <typename OtherUnit, typename OtherRep>
     constexpr auto operator/(Quantity<OtherUnit, OtherRep> q) const {
-        warn_if_integer_division<OtherRep>();
+        warn_if_integer_division<OtherUnit, OtherRep>();
         return make_quantity_unless_unitless<UnitQuotientT<Unit, OtherUnit>>(value_ /
                                                                              q.in(OtherUnit{}));
     }
@@ -3954,11 +3954,13 @@ class Quantity {
     }
 
  private:
-    template <typename OtherRep>
+    template <typename OtherUnit, typename OtherRep>
     static constexpr void warn_if_integer_division() {
         constexpr bool uses_integer_division =
             (std::is_integral<Rep>::value && std::is_integral<OtherRep>::value);
-        static_assert(!uses_integer_division,
+        constexpr bool are_units_quantity_equivalent =
+            AreUnitsQuantityEquivalent<UnitT, OtherUnit>::value;
+        static_assert(are_units_quantity_equivalent || !uses_integer_division,
                       "Integer division forbidden: use integer_quotient() if you really want it");
     }
 
@@ -6356,31 +6358,47 @@ constexpr bool numeric_limits<au::Quantity<U, R>>::tinyness_before;
 }  // namespace std
 
 
+namespace au {
+
+// DO NOT follow this pattern to define your own units.  This is for library-defined units.
+// Instead, follow instructions at (https://aurora-opensource.github.io/au/main/howto/new-units/).
+template <typename T>
+struct MinutesLabel {
+    static constexpr const char label[] = "min";
+};
+template <typename T>
+constexpr const char MinutesLabel<T>::label[];
+struct Minutes : decltype(Seconds{} * mag<60>()), MinutesLabel<void> {
+    using MinutesLabel<void>::label;
+};
+constexpr auto minute = SingularNameFor<Minutes>{};
+constexpr auto minutes = QuantityMaker<Minutes>{};
+
+namespace symbols {
+constexpr auto min = SymbolFor<Minutes>{};
+}
+}  // namespace au
+
 
 namespace au {
 
-// Define 1:1 mapping between duration types of chrono library and our library.
-template <typename RepT, typename Period>
-struct CorrespondingQuantity<std::chrono::duration<RepT, Period>> {
-    using Unit = decltype(Seconds{} * (mag<Period::num>() / mag<Period::den>()));
-    using Rep = RepT;
-
-    using ChronoDuration = std::chrono::duration<Rep, Period>;
-
-    static constexpr Rep extract_value(ChronoDuration d) { return d.count(); }
-    static constexpr ChronoDuration construct_from_value(Rep x) { return ChronoDuration{x}; }
+// DO NOT follow this pattern to define your own units.  This is for library-defined units.
+// Instead, follow instructions at (https://aurora-opensource.github.io/au/main/howto/new-units/).
+template <typename T>
+struct HoursLabel {
+    static constexpr const char label[] = "h";
 };
+template <typename T>
+constexpr const char HoursLabel<T>::label[];
+struct Hours : decltype(Minutes{} * mag<60>()), HoursLabel<void> {
+    using HoursLabel<void>::label;
+};
+constexpr auto hour = SingularNameFor<Hours>{};
+constexpr auto hours = QuantityMaker<Hours>{};
 
-// Convert any Au duration quantity to an equivalent `std::chrono::duration`.
-template <typename U, typename R>
-constexpr auto as_chrono_duration(Quantity<U, R> dt) {
-    constexpr auto ratio = unit_ratio(U{}, seconds);
-    static_assert(is_rational(ratio), "Cannot convert to chrono::duration with non-rational ratio");
-    return std::chrono::duration<R,
-                                 std::ratio<get_value<std::intmax_t>(numerator(ratio)),
-                                            get_value<std::intmax_t>(denominator(ratio))>>{dt};
+namespace symbols {
+constexpr auto h = SymbolFor<Hours>{};
 }
-
 }  // namespace au
 
 
@@ -6403,5 +6421,67 @@ constexpr auto bits = QuantityMaker<Bits>{};
 namespace symbols {
 constexpr auto b = SymbolFor<Bits>{};
 }
+}  // namespace au
+
+
+
+namespace au {
+
+// Define 1:1 mapping between duration types of chrono library and our library.
+template <typename RepT, typename Period>
+struct CorrespondingQuantity<std::chrono::duration<RepT, Period>> {
+    using Unit = decltype(Seconds{} * (mag<Period::num>() / mag<Period::den>()));
+    using Rep = RepT;
+
+    using ChronoDuration = std::chrono::duration<Rep, Period>;
+
+    static constexpr Rep extract_value(ChronoDuration d) { return d.count(); }
+    static constexpr ChronoDuration construct_from_value(Rep x) { return ChronoDuration{x}; }
+};
+
+// Define special mappings for widely used chrono types.
+template <typename ChronoType, typename AuUnit>
+struct SpecialCorrespondingQuantity {
+    using Unit = AuUnit;
+    using Rep = decltype(ChronoType{}.count());
+
+    static constexpr Rep extract_value(ChronoType d) { return d.count(); }
+    static constexpr ChronoType construct_from_value(Rep x) { return ChronoType{x}; }
+};
+
+template <>
+struct CorrespondingQuantity<std::chrono::nanoseconds>
+    : SpecialCorrespondingQuantity<std::chrono::nanoseconds, Nano<Seconds>> {};
+
+template <>
+struct CorrespondingQuantity<std::chrono::microseconds>
+    : SpecialCorrespondingQuantity<std::chrono::microseconds, Micro<Seconds>> {};
+
+template <>
+struct CorrespondingQuantity<std::chrono::milliseconds>
+    : SpecialCorrespondingQuantity<std::chrono::milliseconds, Milli<Seconds>> {};
+
+template <>
+struct CorrespondingQuantity<std::chrono::seconds>
+    : SpecialCorrespondingQuantity<std::chrono::seconds, Seconds> {};
+
+template <>
+struct CorrespondingQuantity<std::chrono::minutes>
+    : SpecialCorrespondingQuantity<std::chrono::minutes, Minutes> {};
+
+template <>
+struct CorrespondingQuantity<std::chrono::hours>
+    : SpecialCorrespondingQuantity<std::chrono::hours, Hours> {};
+
+// Convert any Au duration quantity to an equivalent `std::chrono::duration`.
+template <typename U, typename R>
+constexpr auto as_chrono_duration(Quantity<U, R> dt) {
+    constexpr auto ratio = unit_ratio(U{}, seconds);
+    static_assert(is_rational(ratio), "Cannot convert to chrono::duration with non-rational ratio");
+    return std::chrono::duration<R,
+                                 std::ratio<get_value<std::intmax_t>(numerator(ratio)),
+                                            get_value<std::intmax_t>(denominator(ratio))>>{dt};
+}
+
 }  // namespace au
 
