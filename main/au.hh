@@ -24,7 +24,7 @@
 #include <type_traits>
 #include <utility>
 
-// Version identifier: 0.3.5-11-g45b232b
+// Version identifier: 0.3.5-15-g3a4426a
 // <iostream> support: INCLUDED
 // List of included units:
 //   amperes
@@ -891,6 +891,9 @@ template <typename T, typename U>
 constexpr bool same_type_ignoring_cvref(T, U) {
     return SameTypeIgnoringCvref<T, U>::value;
 }
+
+template <typename... Ts>
+struct AlwaysFalse : std::false_type {};
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Implementation details below.
@@ -2039,12 +2042,26 @@ constexpr bool all(const bool (&values)[N]) {
     return true;
 }
 
+// `RealPart<T>` is `T` itself, unless that type has a `.real()` member.
+template <typename T>
+using TypeOfRealMember = decltype(std::declval<T>().real());
+template <typename T>
+// `RealPartImpl` is basically equivalent to the `detected_or<T, TypeOfRealMember, T>` part at the
+// end.  But we special-case `is_arithmetic` to get a fast short-circuit for the overwhelmingly most
+// common case.
+struct RealPartImpl : std::conditional<std::is_arithmetic<T>::value,
+                                       T,
+                                       stdx::experimental::detected_or_t<T, TypeOfRealMember, T>> {
+};
+template <typename T>
+using RealPart = typename RealPartImpl<T>::type;
+
 template <typename Target, typename Enable = void>
 struct SafeCastingChecker {
     template <typename T>
     constexpr bool operator()(T x) {
-        return stdx::cmp_less_equal(std::numeric_limits<Target>::lowest(), x) &&
-               stdx::cmp_greater_equal(std::numeric_limits<Target>::max(), x);
+        return stdx::cmp_less_equal(std::numeric_limits<RealPart<Target>>::lowest(), x) &&
+               stdx::cmp_greater_equal(std::numeric_limits<RealPart<Target>>::max(), x);
     }
 };
 
@@ -2053,8 +2070,8 @@ struct SafeCastingChecker<Target, std::enable_if_t<std::is_integral<Target>::val
     template <typename T>
     constexpr bool operator()(T x) {
         return std::is_integral<T>::value &&
-               stdx::cmp_less_equal(std::numeric_limits<Target>::lowest(), x) &&
-               stdx::cmp_greater_equal(std::numeric_limits<Target>::max(), x);
+               stdx::cmp_less_equal(std::numeric_limits<RealPart<Target>>::lowest(), x) &&
+               stdx::cmp_greater_equal(std::numeric_limits<RealPart<Target>>::max(), x);
     }
 };
 
@@ -2073,8 +2090,8 @@ constexpr MagRepresentationOrError<T> get_value_result(Magnitude<BPs...>) {
     }
 
     // Force the expression to be evaluated in a constexpr context.
-    constexpr auto widened_result =
-        product({base_power_value<T, ExpT<BPs>::num, static_cast<std::uintmax_t>(ExpT<BPs>::den)>(
+    constexpr auto widened_result = product(
+        {base_power_value<RealPart<T>, ExpT<BPs>::num, static_cast<std::uintmax_t>(ExpT<BPs>::den)>(
             BaseT<BPs>::value())...});
 
     if ((widened_result.outcome != MagRepresentationOutcome::OK) ||
@@ -3312,7 +3329,7 @@ template <typename U1, typename U2>
 struct SameDimension : stdx::bool_constant<U1::dim_ == U2::dim_> {};
 
 template <typename Rep, typename ScaleFactor, typename SourceRep>
-struct CoreImplicitConversionPolicyImpl
+struct CoreImplicitConversionPolicyImplAssumingReal
     : stdx::disjunction<
           std::is_floating_point<Rep>,
           stdx::conjunction<std::is_integral<SourceRep>,
@@ -3321,7 +3338,24 @@ struct CoreImplicitConversionPolicyImpl
 
 // Always permit the identity scaling.
 template <typename Rep>
-struct CoreImplicitConversionPolicyImpl<Rep, Magnitude<>, Rep> : std::true_type {};
+struct CoreImplicitConversionPolicyImplAssumingReal<Rep, Magnitude<>, Rep> : std::true_type {};
+
+// `SettingPureRealFromMixedReal<A, B>` tests whether `A` is a pure real type, _and_ `B` is a type
+// that has a real _part_, but is not purely real (call it a "mixed-real" type).
+//
+// The point is to guard against situations where we're _implicitly_ converting a "mixed-real" type
+// (i.e., typically a complex number) to a pure real type.
+template <typename Rep, typename SourceRep>
+struct SettingPureRealFromMixedReal
+    : stdx::conjunction<stdx::negation<std::is_same<SourceRep, RealPart<SourceRep>>>,
+                        std::is_same<Rep, RealPart<Rep>>> {};
+
+template <typename Rep, typename ScaleFactor, typename SourceRep>
+struct CoreImplicitConversionPolicyImpl
+    : stdx::conjunction<stdx::negation<SettingPureRealFromMixedReal<Rep, SourceRep>>,
+                        CoreImplicitConversionPolicyImplAssumingReal<RealPart<Rep>,
+                                                                     ScaleFactor,
+                                                                     RealPart<SourceRep>>> {};
 
 template <typename Rep, typename ScaleFactor, typename SourceRep>
 using CoreImplicitConversionPolicy = CoreImplicitConversionPolicyImpl<Rep, ScaleFactor, SourceRep>;
@@ -3454,7 +3488,7 @@ struct ApplyMagnitudeImpl<Mag, ApplyAs::INTEGER_MULTIPLY, T, is_T_integral> {
     static_assert(is_T_integral == std::is_integral<T>::value,
                   "Mismatched instantiation (should never be done manually)");
 
-    constexpr T operator()(const T &x) { return x * get_value<T>(Mag{}); }
+    constexpr T operator()(const T &x) { return x * get_value<RealPart<T>>(Mag{}); }
 
     static constexpr bool would_overflow(const T &x) {
         constexpr auto mag_value_result = get_value_result<T>(Mag{});
@@ -3473,7 +3507,7 @@ struct ApplyMagnitudeImpl<Mag, ApplyAs::INTEGER_DIVIDE, T, is_T_integral> {
     static_assert(is_T_integral == std::is_integral<T>::value,
                   "Mismatched instantiation (should never be done manually)");
 
-    constexpr T operator()(const T &x) { return x / get_value<T>(MagInverseT<Mag>{}); }
+    constexpr T operator()(const T &x) { return x / get_value<RealPart<T>>(MagInverseT<Mag>{}); }
 
     static constexpr bool would_overflow(const T &) { return false; }
 
@@ -3516,8 +3550,8 @@ struct ApplyMagnitudeImpl<Mag, ApplyAs::RATIONAL_MULTIPLY, T, true> {
 
     constexpr T operator()(const T &x) {
         using P = PromotedType<T>;
-        return static_cast<T>(x * get_value<P>(numerator(Mag{})) /
-                              get_value<P>(denominator(Mag{})));
+        return static_cast<T>(x * get_value<RealPart<P>>(numerator(Mag{})) /
+                              get_value<RealPart<P>>(denominator(Mag{})));
     }
 
     static constexpr bool would_overflow(const T &x) {
@@ -3539,7 +3573,7 @@ struct ApplyMagnitudeImpl<Mag, ApplyAs::RATIONAL_MULTIPLY, T, false> {
     static_assert(!std::is_integral<T>::value,
                   "Mismatched instantiation (should never be done manually)");
 
-    constexpr T operator()(const T &x) { return x * get_value<T>(Mag{}); }
+    constexpr T operator()(const T &x) { return x * get_value<RealPart<T>>(Mag{}); }
 
     static constexpr bool would_overflow(const T &x) {
         constexpr auto mag_value_result = get_value_result<T>(Mag{});
@@ -3560,7 +3594,7 @@ struct ApplyMagnitudeImpl<Mag, ApplyAs::IRRATIONAL_MULTIPLY, T, is_T_integral> {
     static_assert(is_T_integral == std::is_integral<T>::value,
                   "Mismatched instantiation (should never be done manually)");
 
-    constexpr T operator()(const T &x) { return x * get_value<T>(Mag{}); }
+    constexpr T operator()(const T &x) { return x * get_value<RealPart<T>>(Mag{}); }
 
     static constexpr bool would_overflow(const T &x) {
         constexpr auto mag_value_result = get_value_result<T>(Mag{});
@@ -3682,6 +3716,8 @@ class Quantity {
     using Rep = RepT;
     using Unit = UnitT;
     static constexpr auto unit = Unit{};
+
+    static_assert(IsValidRep<Rep>::value, "Rep must meet our requirements for a rep");
 
     // IMPLICIT constructor for another Quantity of the same Dimension.
     template <typename OtherUnit,
@@ -3907,16 +3943,21 @@ class Quantity {
         return *this;
     }
 
+    template <typename T>
+    constexpr void perform_shorthand_checks() {
+        static_assert(
+            IsValidRep<T>::value,
+            "This overload is only for scalar mult/div-assignment with raw numeric types");
+
+        static_assert((!std::is_integral<detail::RealPart<Rep>>::value) ||
+                          std::is_integral<detail::RealPart<T>>::value,
+                      "We don't support compound mult/div of integral types by floating point");
+    }
+
     // Short-hand multiplication assignment.
     template <typename T>
     constexpr Quantity &operator*=(T s) {
-        static_assert(
-            std::is_arithmetic<T>::value,
-            "This overload is only for scalar multiplication-assignment with arithmetic types");
-
-        static_assert(
-            std::is_floating_point<Rep>::value || std::is_integral<T>::value,
-            "We don't support compound multiplication of integral types by floating point");
+        perform_shorthand_checks<T>();
 
         value_ *= s;
         return *this;
@@ -3925,11 +3966,7 @@ class Quantity {
     // Short-hand division assignment.
     template <typename T>
     constexpr Quantity &operator/=(T s) {
-        static_assert(std::is_arithmetic<T>::value,
-                      "This overload is only for scalar division-assignment with arithmetic types");
-
-        static_assert(std::is_floating_point<Rep>::value || std::is_integral<T>::value,
-                      "We don't support compound division of integral types by floating point");
+        perform_shorthand_checks<T>();
 
         value_ /= s;
         return *this;
@@ -4048,6 +4085,11 @@ using QuantityI64 = Quantity<UnitT, int64_t>;
 template <typename UnitT>
 using QuantityU64 = Quantity<UnitT, uint64_t>;
 
+// Forward declare `QuantityPoint` here, so that we can give better error messages when users try to
+// make it into a quantity.
+template <typename U, typename R>
+class QuantityPoint;
+
 template <typename UnitT>
 struct QuantityMaker {
     using Unit = UnitT;
@@ -4056,6 +4098,18 @@ struct QuantityMaker {
     template <typename T>
     constexpr Quantity<Unit, T> operator()(T value) const {
         return {value};
+    }
+
+    template <typename U, typename R>
+    constexpr void operator()(Quantity<U, R>) const {
+        constexpr bool is_not_already_a_quantity = detail::AlwaysFalse<U, R>::value;
+        static_assert(is_not_already_a_quantity, "Input to QuantityMaker is already a Quantity");
+    }
+
+    template <typename U, typename R>
+    constexpr void operator()(QuantityPoint<U, R>) const {
+        constexpr bool is_not_a_quantity_point = detail::AlwaysFalse<U, R>::value;
+        static_assert(is_not_a_quantity_point, "Input to QuantityMaker is a QuantityPoint");
     }
 
     template <typename... BPs>
@@ -4781,6 +4835,19 @@ struct QuantityPointMaker {
     template <typename T>
     constexpr auto operator()(T value) const {
         return QuantityPoint<Unit, T>{make_quantity<Unit>(value)};
+    }
+
+    template <typename U, typename R>
+    constexpr void operator()(Quantity<U, R>) const {
+        constexpr bool is_not_a_quantity = detail::AlwaysFalse<U, R>::value;
+        static_assert(is_not_a_quantity, "Input to QuantityPointMaker is a Quantity");
+    }
+
+    template <typename U, typename R>
+    constexpr void operator()(QuantityPoint<U, R>) const {
+        constexpr bool is_not_already_a_quantity_point = detail::AlwaysFalse<U, R>::value;
+        static_assert(is_not_already_a_quantity_point,
+                      "Input to QuantityPointMaker is already a QuantityPoint");
     }
 
     template <typename... BPs>
