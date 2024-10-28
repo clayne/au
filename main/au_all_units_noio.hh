@@ -23,64 +23,137 @@
 #include <type_traits>
 #include <utility>
 
-// Version identifier: 0.3.5-23-g0d8b244
+// Version identifier: 0.3.5-27-g99c02d6
 // <iostream> support: EXCLUDED
 // List of included units:
 //   amperes
+//   amperes_fwd
 //   bars
+//   bars_fwd
 //   becquerel
+//   becquerel_fwd
 //   bits
+//   bits_fwd
 //   bytes
+//   bytes_fwd
 //   candelas
+//   candelas_fwd
 //   celsius
+//   celsius_fwd
 //   coulombs
+//   coulombs_fwd
 //   days
+//   days_fwd
 //   degrees
+//   degrees_fwd
 //   fahrenheit
+//   fahrenheit_fwd
 //   farads
+//   farads_fwd
 //   fathoms
+//   fathoms_fwd
 //   feet
+//   feet_fwd
 //   furlongs
+//   furlongs_fwd
 //   grams
+//   grams_fwd
 //   grays
+//   grays_fwd
 //   henries
+//   henries_fwd
 //   hertz
+//   hertz_fwd
 //   hours
+//   hours_fwd
 //   inches
+//   inches_fwd
 //   joules
+//   joules_fwd
 //   katals
+//   katals_fwd
 //   kelvins
+//   kelvins_fwd
 //   knots
+//   knots_fwd
 //   liters
+//   liters_fwd
 //   lumens
+//   lumens_fwd
 //   lux
+//   lux_fwd
 //   meters
+//   meters_fwd
 //   miles
+//   miles_fwd
 //   minutes
+//   minutes_fwd
 //   moles
+//   moles_fwd
 //   nautical_miles
+//   nautical_miles_fwd
 //   newtons
+//   newtons_fwd
 //   ohms
+//   ohms_fwd
 //   pascals
+//   pascals_fwd
 //   percent
+//   percent_fwd
 //   pounds_force
+//   pounds_force_fwd
 //   pounds_mass
+//   pounds_mass_fwd
 //   radians
+//   radians_fwd
 //   revolutions
+//   revolutions_fwd
 //   seconds
+//   seconds_fwd
 //   siemens
+//   siemens_fwd
 //   slugs
+//   slugs_fwd
 //   standard_gravity
+//   standard_gravity_fwd
 //   steradians
+//   steradians_fwd
 //   tesla
+//   tesla_fwd
 //   unos
+//   unos_fwd
 //   us_gallons
+//   us_gallons_fwd
 //   us_pints
+//   us_pints_fwd
 //   us_quarts
+//   us_quarts_fwd
 //   volts
+//   volts_fwd
 //   watts
+//   watts_fwd
 //   webers
+//   webers_fwd
 //   yards
+//   yards_fwd
+
+namespace au {
+
+struct PoundsForce;
+
+}  // namespace au
+
+namespace au {
+
+struct Unos;
+
+}  // namespace au
+
+namespace au {
+
+struct Candelas;
+
+}  // namespace au
 
 
 namespace au {
@@ -134,47 +207,152 @@ using void_t = void;
 
 namespace au {
 
-// A type representing a quantity of "zero" in any units.
-//
-// Zero is special: it's the only number that we can meaningfully compare or assign to a Quantity of
-// _any_ dimension.  Giving it a special type (and a predefined constant of that type, `ZERO`,
-// defined below) lets our code be both concise and readable.
-//
-// For example, we can zero-initialize any arbitrary Quantity, even if it doesn't have a
-// user-defined literal, and even if it's in a header file so we couldn't use the literals anyway:
-//
-//   struct PathPoint {
-//       QuantityD<RadiansPerMeter> curvature = ZERO;
-//   };
-struct Zero {
-    // Implicit conversion to arithmetic types.
-    template <typename T, typename Enable = std::enable_if_t<std::is_arithmetic<T>::value>>
-    constexpr operator T() const {
-        return 0;
-    }
+struct Zero;
 
-    // Implicit conversion to chrono durations.
-    template <typename Rep, typename Period>
-    constexpr operator std::chrono::duration<Rep, Period>() const {
-        return std::chrono::duration<Rep, Period>{0};
-    }
-};
+template <typename... BPs>
+struct Dimension;
 
-// A value of Zero.
+template <typename... BPs>
+struct Magnitude;
+
+template <typename UnitT>
+struct QuantityMaker;
+
+template <typename Unit>
+struct SingularNameFor;
+
+template <typename UnitT>
+struct QuantityPointMaker;
+
+template <typename UnitT, typename RepT>
+class Quantity;
+
 //
-// This exists purely for convenience, so people don't have to call the initializer.  i.e., it lets
-// us write `ZERO` instead of `Zero{}`.
-static constexpr auto ZERO = Zero{};
+// Quantity aliases to set a particular Rep.
+//
+// This presents a less cumbersome interface for end users.
+//
+template <typename UnitT>
+using QuantityD = Quantity<UnitT, double>;
+template <typename UnitT>
+using QuantityF = Quantity<UnitT, float>;
+template <typename UnitT>
+using QuantityI = Quantity<UnitT, int>;
+template <typename UnitT>
+using QuantityU = Quantity<UnitT, unsigned int>;
+template <typename UnitT>
+using QuantityI32 = Quantity<UnitT, int32_t>;
+template <typename UnitT>
+using QuantityU32 = Quantity<UnitT, uint32_t>;
+template <typename UnitT>
+using QuantityI64 = Quantity<UnitT, int64_t>;
+template <typename UnitT>
+using QuantityU64 = Quantity<UnitT, uint64_t>;
 
-// Addition, subtraction, and comparison of Zero are well defined.
-inline constexpr Zero operator+(Zero, Zero) { return ZERO; }
-inline constexpr Zero operator-(Zero, Zero) { return ZERO; }
-inline constexpr bool operator==(Zero, Zero) { return true; }
-inline constexpr bool operator>=(Zero, Zero) { return true; }
-inline constexpr bool operator<=(Zero, Zero) { return true; }
-inline constexpr bool operator!=(Zero, Zero) { return false; }
-inline constexpr bool operator>(Zero, Zero) { return false; }
-inline constexpr bool operator<(Zero, Zero) { return false; }
+template <typename T>
+struct CorrespondingQuantity;
+
+template <typename UnitT, typename RepT>
+class QuantityPoint;
+
+//
+// QuantityPoint aliases to set a particular Rep.
+//
+// This presents a less cumbersome interface for end users.
+//
+template <typename UnitT>
+using QuantityPointD = QuantityPoint<UnitT, double>;
+template <typename UnitT>
+using QuantityPointF = QuantityPoint<UnitT, float>;
+template <typename UnitT>
+using QuantityPointI = QuantityPoint<UnitT, int>;
+template <typename UnitT>
+using QuantityPointU = QuantityPoint<UnitT, unsigned int>;
+template <typename UnitT>
+using QuantityPointI32 = QuantityPoint<UnitT, int32_t>;
+template <typename UnitT>
+using QuantityPointU32 = QuantityPoint<UnitT, uint32_t>;
+template <typename UnitT>
+using QuantityPointI64 = QuantityPoint<UnitT, int64_t>;
+template <typename UnitT>
+using QuantityPointU64 = QuantityPoint<UnitT, uint64_t>;
+
+template <typename Unit>
+struct Constant;
+
+template <typename Unit>
+struct SymbolFor;
+
+template <template <class U> class Prefix>
+struct PrefixApplier;
+
+// SI Prefixes.
+template <typename U>
+struct Quetta;
+template <typename U>
+struct Ronna;
+template <typename U>
+struct Yotta;
+template <typename U>
+struct Zetta;
+template <typename U>
+struct Exa;
+template <typename U>
+struct Peta;
+template <typename U>
+struct Tera;
+template <typename U>
+struct Giga;
+template <typename U>
+struct Mega;
+template <typename U>
+struct Kilo;
+template <typename U>
+struct Hecto;
+template <typename U>
+struct Deka;
+template <typename U>
+struct Deci;
+template <typename U>
+struct Centi;
+template <typename U>
+struct Milli;
+template <typename U>
+struct Micro;
+template <typename U>
+struct Nano;
+template <typename U>
+struct Pico;
+template <typename U>
+struct Femto;
+template <typename U>
+struct Atto;
+template <typename U>
+struct Zepto;
+template <typename U>
+struct Yocto;
+template <typename U>
+struct Ronto;
+template <typename U>
+struct Quecto;
+
+// Binary Prefixes.
+template <typename U>
+struct Yobi;
+template <typename U>
+struct Zebi;
+template <typename U>
+struct Exbi;
+template <typename U>
+struct Pebi;
+template <typename U>
+struct Tebi;
+template <typename U>
+struct Gibi;
+template <typename U>
+struct Mebi;
+template <typename U>
+struct Kibi;
 
 }  // namespace au
 
@@ -187,6 +365,11 @@ template <typename PackT, typename T>
 struct Prepend;
 template <typename PackT, typename T>
 using PrependT = typename Prepend<PackT, T>::type;
+
+template <typename T, typename Pack>
+struct DropAllImpl;
+template <typename T, typename Pack>
+using DropAll = typename DropAllImpl<T, Pack>::type;
 
 template <typename T, typename U>
 struct SameTypeIgnoringCvref : std::is_same<stdx::remove_cvref_t<T>, stdx::remove_cvref_t<U>> {};
@@ -201,11 +384,29 @@ struct AlwaysFalse : std::false_type {};
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Implementation details below.
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// `Prepend` implementation.
 
 template <template <typename...> class Pack, typename T, typename... Us>
 struct Prepend<Pack<Us...>, T> {
     using type = Pack<T, Us...>;
 };
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// `DropAll` implementation.
+
+// Base case.
+template <typename T, template <class...> class Pack>
+struct DropAllImpl<T, Pack<>> : stdx::type_identity<Pack<>> {};
+
+// Recursive case:
+template <typename T, template <class...> class Pack, typename H, typename... Ts>
+struct DropAllImpl<T, Pack<H, Ts...>>
+    : std::conditional<std::is_same<T, H>::value,
+                       DropAll<T, Pack<Ts...>>,
+                       detail::PrependT<DropAll<T, Pack<Ts...>>, H>> {};
 
 }  // namespace detail
 }  // namespace au
@@ -758,14 +959,6 @@ struct IsQuotientValidRep;
 // Implementation details below.
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-// Forward declarations for main Au container types.
-template <typename U, typename R>
-class Quantity;
-template <typename U, typename R>
-class QuantityPoint;
-template <typename T>
-struct CorrespondingQuantity;
-
 namespace detail {
 template <typename T>
 struct IsAuType : std::false_type {};
@@ -948,6 +1141,366 @@ struct Minus {
 constexpr auto minus = Minus{};
 
 }  // namespace detail
+}  // namespace au
+
+namespace au {
+
+struct Seconds;
+
+}  // namespace au
+
+namespace au {
+
+struct Minutes;
+
+}  // namespace au
+
+namespace au {
+
+struct Hours;
+
+}  // namespace au
+
+namespace au {
+
+struct Feet;
+
+}  // namespace au
+
+namespace au {
+
+struct Joules;
+
+}  // namespace au
+
+namespace au {
+
+struct Degrees;
+
+}  // namespace au
+
+namespace au {
+
+struct Meters;
+
+}  // namespace au
+
+namespace au {
+
+struct Inches;
+
+}  // namespace au
+
+namespace au {
+
+struct Fathoms;
+
+}  // namespace au
+
+namespace au {
+
+struct Newtons;
+
+}  // namespace au
+
+namespace au {
+
+struct Kelvins;
+
+}  // namespace au
+
+namespace au {
+
+struct Fahrenheit;
+
+}  // namespace au
+
+namespace au {
+
+struct Lux;
+
+}  // namespace au
+
+namespace au {
+
+struct Moles;
+
+}  // namespace au
+
+namespace au {
+
+struct Grams;
+
+}  // namespace au
+
+namespace au {
+
+struct Watts;
+
+}  // namespace au
+
+namespace au {
+
+struct Amperes;
+
+}  // namespace au
+
+namespace au {
+
+struct Volts;
+
+}  // namespace au
+
+namespace au {
+
+struct Webers;
+
+}  // namespace au
+
+namespace au {
+
+struct Henries;
+
+}  // namespace au
+
+namespace au {
+
+struct USPints;
+
+}  // namespace au
+
+namespace au {
+
+struct USQuarts;
+
+}  // namespace au
+
+namespace au {
+
+struct Radians;
+
+}  // namespace au
+
+namespace au {
+
+struct Hertz;
+
+}  // namespace au
+
+namespace au {
+
+struct Bits;
+
+}  // namespace au
+
+namespace au {
+
+struct Celsius;
+
+}  // namespace au
+
+namespace au {
+
+struct Yards;
+
+}  // namespace au
+
+namespace au {
+
+struct NauticalMiles;
+
+}  // namespace au
+
+namespace au {
+
+struct Slugs;
+
+}  // namespace au
+
+namespace au {
+
+struct Becquerel;
+
+}  // namespace au
+
+namespace au {
+
+struct Miles;
+
+}  // namespace au
+
+namespace au {
+
+struct Knots;
+
+}  // namespace au
+
+namespace au {
+
+struct Liters;
+
+}  // namespace au
+
+namespace au {
+
+struct Katals;
+
+}  // namespace au
+
+namespace au {
+
+struct Siemens;
+
+}  // namespace au
+
+namespace au {
+
+struct Steradians;
+
+}  // namespace au
+
+namespace au {
+
+struct StandardGravity;
+
+}  // namespace au
+
+namespace au {
+
+struct Tesla;
+
+}  // namespace au
+
+namespace au {
+
+struct Ohms;
+
+}  // namespace au
+
+namespace au {
+
+struct PoundsMass;
+
+}  // namespace au
+
+namespace au {
+
+struct Furlongs;
+
+}  // namespace au
+
+namespace au {
+
+struct Coulombs;
+
+}  // namespace au
+
+namespace au {
+
+struct USGallons;
+
+}  // namespace au
+
+namespace au {
+
+struct Bytes;
+
+}  // namespace au
+
+namespace au {
+
+struct Percent;
+
+}  // namespace au
+
+namespace au {
+
+struct Pascals;
+
+}  // namespace au
+
+namespace au {
+
+struct Bars;
+
+}  // namespace au
+
+namespace au {
+
+struct Days;
+
+}  // namespace au
+
+namespace au {
+
+struct Revolutions;
+
+}  // namespace au
+
+namespace au {
+
+struct Grays;
+
+}  // namespace au
+
+namespace au {
+
+struct Lumens;
+
+}  // namespace au
+
+namespace au {
+
+struct Farads;
+
+}  // namespace au
+
+
+
+namespace au {
+
+// A type representing a quantity of "zero" in any units.
+//
+// Zero is special: it's the only number that we can meaningfully compare or assign to a Quantity of
+// _any_ dimension.  Giving it a special type (and a predefined constant of that type, `ZERO`,
+// defined below) lets our code be both concise and readable.
+//
+// For example, we can zero-initialize any arbitrary Quantity, even if it doesn't have a
+// user-defined literal, and even if it's in a header file so we couldn't use the literals anyway:
+//
+//   struct PathPoint {
+//       QuantityD<RadiansPerMeter> curvature = ZERO;
+//   };
+struct Zero {
+    // Implicit conversion to arithmetic types.
+    template <typename T, typename Enable = std::enable_if_t<std::is_arithmetic<T>::value>>
+    constexpr operator T() const {
+        return 0;
+    }
+
+    // Implicit conversion to chrono durations.
+    template <typename Rep, typename Period>
+    constexpr operator std::chrono::duration<Rep, Period>() const {
+        return std::chrono::duration<Rep, Period>{0};
+    }
+};
+
+// A value of Zero.
+//
+// This exists purely for convenience, so people don't have to call the initializer.  i.e., it lets
+// us write `ZERO` instead of `Zero{}`.
+static constexpr auto ZERO = Zero{};
+
+// Addition, subtraction, and comparison of Zero are well defined.
+inline constexpr Zero operator+(Zero, Zero) { return ZERO; }
+inline constexpr Zero operator-(Zero, Zero) { return ZERO; }
+inline constexpr bool operator==(Zero, Zero) { return true; }
+inline constexpr bool operator>=(Zero, Zero) { return true; }
+inline constexpr bool operator<=(Zero, Zero) { return true; }
+inline constexpr bool operator!=(Zero, Zero) { return false; }
+inline constexpr bool operator>(Zero, Zero) { return false; }
+inline constexpr bool operator<(Zero, Zero) { return false; }
+
 }  // namespace au
 
 
@@ -2996,10 +3549,59 @@ struct FirstMatchingUnit<Matcher, TargetUnit, List<H, Ts...>>
                          stdx::type_identity<H>,
                          FirstMatchingUnit<Matcher, TargetUnit, List<Ts...>>> {};
 
+// A "redundant" unit, among a list of units, is one that is an exact integer multiple of another.
+//
+// If two units are identical, then each is redundant with the other.
+//
+// If two units are distinct, but quantity-equivalent, then the unit that comes later in the
+// standard unit ordering (i.e., `InOrderFor<Pack, ...>`) is the redundant one.
+template <typename Pack>
+struct EliminateRedundantUnitsImpl;
+template <typename Pack>
+using EliminateRedundantUnits = typename EliminateRedundantUnitsImpl<Pack>::type;
+
+// Base case: no units to eliminate.
+template <template <class...> class Pack>
+struct EliminateRedundantUnitsImpl<Pack<>> : stdx::type_identity<Pack<>> {};
+
+// Helper for recursive case.
+template <template <class...> class Pack, typename U1, typename U2>
+struct IsFirstUnitRedundant
+    : std::conditional_t<std::is_same<U1, U2>::value,
+                         std::true_type,
+                         std::conditional_t<AreUnitsQuantityEquivalent<U1, U2>::value,
+                                            InOrderFor<Pack, U2, U1>,
+                                            IsInteger<UnitRatioT<U1, U2>>>> {};
+
+// Recursive case: eliminate first unit if it is redundant; else, keep it and eliminate any later
+// units that are redundant with it.
+template <template <class...> class Pack, typename H, typename... Ts>
+struct EliminateRedundantUnitsImpl<Pack<H, Ts...>>
+    : std::conditional<
+
+          // If `H` is redundant with _any later unit_, simply omit it.
+          stdx::disjunction<IsFirstUnitRedundant<Pack, H, Ts>...>::value,
+          EliminateRedundantUnits<Pack<Ts...>>,
+
+          // Otherwise, we know we'll need to keep `H`, so we prepend it to the remaining result.
+          //
+          // To get that result, we first replace any units _that `H` makes redundant_ with `void`.
+          // Then, we drop all `void`, before finally recursively eliminating any units that are
+          // redundant among those that remain.
+          PrependT<
+              EliminateRedundantUnits<DropAll<
+                  void,
+
+                  // `Pack<Ts...>`, but with redundant-with-`H` units replaced by `void`:
+                  Pack<std::conditional_t<IsFirstUnitRedundant<Pack, Ts, H>::value, void, Ts>...>>>,
+
+              H>> {};
+
 }  // namespace detail
 
 template <typename... Us>
-using ComputeCommonUnitImpl = FlatDedupedTypeListT<CommonUnit, Us...>;
+using ComputeCommonUnitImpl =
+    detail::EliminateRedundantUnits<FlatDedupedTypeListT<CommonUnit, Us...>>;
 
 template <typename... Us>
 struct ComputeCommonUnit
@@ -3672,12 +4274,6 @@ constexpr T apply_magnitude(const T &x, Magnitude<BPs...>) {
 
 namespace au {
 
-template <typename UnitT>
-struct QuantityMaker;
-
-template <typename UnitT, typename RepT>
-class Quantity;
-
 //
 // Make a Quantity of the given Unit, which has this value as measured in the Unit.
 //
@@ -4107,33 +4703,6 @@ constexpr auto rep_cast(Zero z) {
     return z;
 }
 
-//
-// Quantity aliases to set a particular Rep.
-//
-// This presents a less cumbersome interface for end users.
-//
-template <typename UnitT>
-using QuantityD = Quantity<UnitT, double>;
-template <typename UnitT>
-using QuantityF = Quantity<UnitT, float>;
-template <typename UnitT>
-using QuantityI = Quantity<UnitT, int>;
-template <typename UnitT>
-using QuantityU = Quantity<UnitT, unsigned int>;
-template <typename UnitT>
-using QuantityI32 = Quantity<UnitT, int32_t>;
-template <typename UnitT>
-using QuantityU32 = Quantity<UnitT, uint32_t>;
-template <typename UnitT>
-using QuantityI64 = Quantity<UnitT, int64_t>;
-template <typename UnitT>
-using QuantityU64 = Quantity<UnitT, uint64_t>;
-
-// Forward declare `QuantityPoint` here, so that we can give better error messages when users try to
-// make it into a quantity.
-template <typename U, typename R>
-class QuantityPoint;
-
 template <typename UnitT>
 struct QuantityMaker {
     using Unit = UnitT;
@@ -4405,11 +4974,6 @@ namespace au {
 // _absolute temperature measurements_ (e.g., `QuantityPoint<Celsius, T>`).  This type is also
 // analogous to `std::chrono::time_point`, in the same way that `Quantity` is analogous to
 // `std::chrono::duration`.
-template <typename UnitT, typename RepT>
-class QuantityPoint;
-
-template <typename UnitT>
-struct QuantityPointMaker;
 
 // Make a Quantity of the given Unit, which has this value as measured in the Unit.
 template <typename UnitT, typename T>
@@ -4700,28 +5264,6 @@ constexpr auto rep_cast(QuantityPoint<Unit, Rep> q) {
     return q.template as<NewRep>(Unit{});
 }
 
-//
-// QuantityPoint aliases to set a particular Rep.
-//
-// This presents a less cumbersome interface for end users.
-//
-template <typename UnitT>
-using QuantityPointD = QuantityPoint<UnitT, double>;
-template <typename UnitT>
-using QuantityPointF = QuantityPoint<UnitT, float>;
-template <typename UnitT>
-using QuantityPointI = QuantityPoint<UnitT, int>;
-template <typename UnitT>
-using QuantityPointU = QuantityPoint<UnitT, unsigned int>;
-template <typename UnitT>
-using QuantityPointI32 = QuantityPoint<UnitT, int32_t>;
-template <typename UnitT>
-using QuantityPointU32 = QuantityPoint<UnitT, uint32_t>;
-template <typename UnitT>
-using QuantityPointI64 = QuantityPoint<UnitT, int64_t>;
-template <typename UnitT>
-using QuantityPointU64 = QuantityPoint<UnitT, uint64_t>;
-
 namespace detail {
 template <typename X, typename Y, typename Func>
 constexpr auto using_common_point_unit(X x, Y y, Func f) {
@@ -4839,6 +5381,8 @@ struct IntermediateRep
 
 }  // namespace detail
 }  // namespace au
+
+// Keep corresponding `_fwd.hh` file on top.
 
 
 namespace au {
@@ -5190,6 +5734,8 @@ struct AssociatedUnit<SymbolFor<U>> : stdx::type_identity<U> {};
 
 }  // namespace au
 
+// Keep corresponding `_fwd.hh` file on top.
+
 
 namespace au {
 
@@ -5515,6 +6061,8 @@ constexpr auto kibi = PrefixApplier<Kibi>{};
 
 }  // namespace au
 
+// Keep corresponding `_fwd.hh` file on top.
+
 
 namespace au {
 
@@ -5538,6 +6086,8 @@ constexpr auto K = SymbolFor<Kelvins>{};
 }
 }  // namespace au
 
+// Keep corresponding `_fwd.hh` file on top.
+
 
 namespace au {
 
@@ -5559,6 +6109,8 @@ namespace symbols {
 constexpr auto g = SymbolFor<Grams>{};
 }
 }  // namespace au
+
+// Keep corresponding `_fwd.hh` file on top.
 
 
 namespace au {
@@ -5583,6 +6135,8 @@ constexpr auto A = SymbolFor<Amperes>{};
 
 }  // namespace au
 
+// Keep corresponding `_fwd.hh` file on top.
+
 
 namespace au {
 
@@ -5604,6 +6158,8 @@ namespace symbols {
 constexpr auto rad = SymbolFor<Radians>{};
 }
 }  // namespace au
+
+// Keep corresponding `_fwd.hh` file on top.
 
 
 namespace au {
@@ -5627,6 +6183,8 @@ constexpr auto b = SymbolFor<Bits>{};
 }
 }  // namespace au
 
+// Keep corresponding `_fwd.hh` file on top.
+
 
 namespace au {
 
@@ -5648,6 +6206,8 @@ namespace symbols {
 constexpr auto nmi = SymbolFor<NauticalMiles>{};
 }
 }  // namespace au
+
+// Keep corresponding `_fwd.hh` file on top.
 
 
 namespace au {
@@ -5671,6 +6231,8 @@ constexpr auto mol = SymbolFor<Moles>{};
 }
 }  // namespace au
 
+// Keep corresponding `_fwd.hh` file on top.
+
 
 namespace au {
 
@@ -5692,6 +6254,8 @@ namespace symbols {
 constexpr auto sr = SymbolFor<Steradians>{};
 }
 }  // namespace au
+
+// Keep corresponding `_fwd.hh` file on top.
 
 
 namespace au {
@@ -5715,6 +6279,8 @@ constexpr auto lb = SymbolFor<PoundsMass>{};
 }
 }  // namespace au
 
+// Keep corresponding `_fwd.hh` file on top.
+
 
 namespace au {
 
@@ -5736,6 +6302,8 @@ namespace symbols {
 constexpr auto L = SymbolFor<Liters>{};
 }
 }  // namespace au
+
+// Keep corresponding `_fwd.hh` file on top.
 
 
 namespace au {
@@ -5764,6 +6332,8 @@ constexpr auto degC_qty = SymbolFor<Celsius>{};
 }
 }  // namespace au
 
+// Keep corresponding `_fwd.hh` file on top.
+
 
 namespace au {
 
@@ -5785,6 +6355,8 @@ namespace symbols {
 constexpr auto B = SymbolFor<Bytes>{};
 }
 }  // namespace au
+
+// Keep corresponding `_fwd.hh` file on top.
 
 
 namespace au {
@@ -5808,6 +6380,8 @@ constexpr auto deg = SymbolFor<Degrees>{};
 }
 }  // namespace au
 
+// Keep corresponding `_fwd.hh` file on top.
+
 
 namespace au {
 
@@ -5830,6 +6404,8 @@ constexpr auto cd = SymbolFor<Candelas>{};
 }
 }  // namespace au
 
+// Keep corresponding `_fwd.hh` file on top.
+
 
 namespace au {
 
@@ -5851,6 +6427,8 @@ namespace symbols {
 constexpr auto rev = SymbolFor<Revolutions>{};
 }
 }  // namespace au
+
+// Keep corresponding `_fwd.hh` file on top.
 
 
 namespace au {
@@ -6671,6 +7249,8 @@ constexpr bool numeric_limits<au::Quantity<U, R>>::tinyness_before;
 
 }  // namespace std
 
+// Keep corresponding `_fwd.hh` file on top.
+
 
 namespace au {
 
@@ -6693,6 +7273,8 @@ constexpr auto s = SymbolFor<Seconds>{};
 }
 }  // namespace au
 
+// Keep corresponding `_fwd.hh` file on top.
+
 
 namespace au {
 
@@ -6714,6 +7296,8 @@ namespace symbols {
 constexpr auto in = SymbolFor<Inches>{};
 }
 }  // namespace au
+
+// Keep corresponding `_fwd.hh` file on top.
 
 
 namespace au {
@@ -6744,6 +7328,8 @@ constexpr auto degF_qty = SymbolFor<Fahrenheit>{};
 }
 }  // namespace au
 
+// Keep corresponding `_fwd.hh` file on top.
+
 
 namespace au {
 
@@ -6765,6 +7351,8 @@ namespace symbols {
 constexpr auto N = SymbolFor<Newtons>{};
 }
 }  // namespace au
+
+// Keep corresponding `_fwd.hh` file on top.
 
 
 namespace au {
@@ -6789,6 +7377,8 @@ constexpr auto US_qt = SymbolFor<USQuarts>{};
 
 }  // namespace au
 
+// Keep corresponding `_fwd.hh` file on top.
+
 
 namespace au {
 
@@ -6809,6 +7399,8 @@ namespace symbols {
 constexpr auto Bq = SymbolFor<Becquerel>{};
 }
 }  // namespace au
+
+// Keep corresponding `_fwd.hh` file on top.
 
 
 namespace au {
@@ -6833,6 +7425,8 @@ constexpr auto US_pt = SymbolFor<USPints>{};
 
 }  // namespace au
 
+// Keep corresponding `_fwd.hh` file on top.
+
 
 namespace au {
 
@@ -6853,6 +7447,8 @@ namespace symbols {
 constexpr auto Hz = SymbolFor<Hertz>{};
 }
 }  // namespace au
+
+// Keep corresponding `_fwd.hh` file on top.
 
 
 namespace au {
@@ -6875,6 +7471,8 @@ namespace symbols {
 constexpr auto kat = SymbolFor<Katals>{};
 }
 }  // namespace au
+
+// Keep corresponding `_fwd.hh` file on top.
 
 
 namespace au {
@@ -6899,6 +7497,8 @@ constexpr auto g_0 = SymbolFor<StandardGravity>{};
 }
 }  // namespace au
 
+// Keep corresponding `_fwd.hh` file on top.
+
 
 namespace au {
 
@@ -6920,6 +7520,8 @@ namespace symbols {
 constexpr auto lbf = SymbolFor<PoundsForce>{};
 }
 }  // namespace au
+
+// Keep corresponding `_fwd.hh` file on top.
 
 
 namespace au {
@@ -6943,6 +7545,8 @@ constexpr auto US_gal = SymbolFor<USGallons>{};
 }
 
 }  // namespace au
+
+// Keep corresponding `_fwd.hh` file on top.
 
 
 namespace au {
@@ -6973,6 +7577,8 @@ constexpr auto Pa = SymbolFor<Pascals>{};
 }
 }  // namespace au
 
+// Keep corresponding `_fwd.hh` file on top.
+
 
 namespace au {
 
@@ -6994,6 +7600,8 @@ namespace symbols {
 constexpr auto bar = SymbolFor<Bars>{};
 }  // namespace symbols
 }  // namespace au
+
+// Keep corresponding `_fwd.hh` file on top.
 
 
 namespace au {
@@ -7017,6 +7625,8 @@ constexpr auto lm = SymbolFor<Lumens>{};
 }
 }  // namespace au
 
+// Keep corresponding `_fwd.hh` file on top.
+
 
 namespace au {
 
@@ -7039,6 +7649,8 @@ constexpr auto C = SymbolFor<Coulombs>{};
 }
 }  // namespace au
 
+// Keep corresponding `_fwd.hh` file on top.
+
 
 namespace au {
 
@@ -7059,6 +7671,8 @@ namespace symbols {
 constexpr auto lx = SymbolFor<Lux>{};
 }
 }  // namespace au
+
+// Keep corresponding `_fwd.hh` file on top.
 
 
 namespace au {
@@ -7082,6 +7696,8 @@ constexpr auto min = SymbolFor<Minutes>{};
 }
 }  // namespace au
 
+// Keep corresponding `_fwd.hh` file on top.
+
 
 namespace au {
 
@@ -7103,6 +7719,8 @@ namespace symbols {
 constexpr auto ft = SymbolFor<Feet>{};
 }
 }  // namespace au
+
+// Keep corresponding `_fwd.hh` file on top.
 
 
 namespace au {
@@ -7126,6 +7744,8 @@ constexpr auto J = SymbolFor<Joules>{};
 }
 }  // namespace au
 
+// Keep corresponding `_fwd.hh` file on top.
+
 
 namespace au {
 
@@ -7147,6 +7767,8 @@ namespace symbols {
 constexpr auto mi = SymbolFor<Miles>{};
 }
 }  // namespace au
+
+// Keep corresponding `_fwd.hh` file on top.
 
 
 namespace au {
@@ -7170,6 +7792,8 @@ constexpr auto yd = SymbolFor<Yards>{};
 }
 }  // namespace au
 
+// Keep corresponding `_fwd.hh` file on top.
+
 
 namespace au {
 
@@ -7191,6 +7815,8 @@ namespace symbols {
 constexpr auto slug = SymbolFor<Slugs>{};
 }
 }  // namespace au
+
+// Keep corresponding `_fwd.hh` file on top.
 
 
 namespace au {
@@ -7214,6 +7840,8 @@ constexpr auto Gy = SymbolFor<Grays>{};
 }
 }  // namespace au
 
+// Keep corresponding `_fwd.hh` file on top.
+
 
 namespace au {
 
@@ -7235,6 +7863,8 @@ namespace symbols {
 constexpr auto h = SymbolFor<Hours>{};
 }
 }  // namespace au
+
+// Keep corresponding `_fwd.hh` file on top.
 
 
 namespace au {
@@ -7258,6 +7888,8 @@ constexpr auto ftm = SymbolFor<Fathoms>{};
 }
 }  // namespace au
 
+// Keep corresponding `_fwd.hh` file on top.
+
 
 namespace au {
 
@@ -7279,6 +7911,8 @@ namespace symbols {
 constexpr auto W = SymbolFor<Watts>{};
 }
 }  // namespace au
+
+// Keep corresponding `_fwd.hh` file on top.
 
 
 namespace au {
@@ -7302,6 +7936,8 @@ constexpr auto kn = SymbolFor<Knots>{};
 }
 }  // namespace au
 
+// Keep corresponding `_fwd.hh` file on top.
+
 
 namespace au {
 
@@ -7323,6 +7959,8 @@ namespace symbols {
 constexpr auto fur = SymbolFor<Furlongs>{};
 }
 }  // namespace au
+
+// Keep corresponding `_fwd.hh` file on top.
 
 
 namespace au {
@@ -7408,6 +8046,8 @@ constexpr auto as_chrono_duration(Quantity<U, R> dt) {
 
 }  // namespace au
 
+// Keep corresponding `_fwd.hh` file on top.
+
 
 namespace au {
 
@@ -7430,6 +8070,8 @@ constexpr auto V = SymbolFor<Volts>{};
 }
 }  // namespace au
 
+// Keep corresponding `_fwd.hh` file on top.
+
 
 namespace au {
 
@@ -7451,6 +8093,8 @@ namespace symbols {
 constexpr auto ohm = SymbolFor<Ohms>{};
 }
 }  // namespace au
+
+// Keep corresponding `_fwd.hh` file on top.
 
 
 namespace au {
@@ -7475,6 +8119,8 @@ constexpr auto F = SymbolFor<Farads>{};
 }  // namespace au
 
 
+// Keep corresponding `_fwd.hh` file on top.
+
 
 namespace au {
 
@@ -7497,6 +8143,8 @@ constexpr auto Wb = SymbolFor<Webers>{};
 }
 }  // namespace au
 
+// Keep corresponding `_fwd.hh` file on top.
+
 
 namespace au {
 
@@ -7517,6 +8165,8 @@ namespace symbols {
 constexpr auto T = SymbolFor<Tesla>{};
 }
 }  // namespace au
+
+// Keep corresponding `_fwd.hh` file on top.
 
 
 namespace au {
@@ -7539,6 +8189,8 @@ namespace symbols {
 constexpr auto S = SymbolFor<Siemens>{};
 }
 }  // namespace au
+
+// Keep corresponding `_fwd.hh` file on top.
 
 
 namespace au {

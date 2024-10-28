@@ -24,7 +24,7 @@
 #include <type_traits>
 #include <utility>
 
-// Version identifier: 0.3.5-23-g0d8b244
+// Version identifier: 0.3.5-27-g99c02d6
 // <iostream> support: INCLUDED
 // List of included units:
 //   amperes
@@ -41,47 +41,152 @@
 
 namespace au {
 
-// A type representing a quantity of "zero" in any units.
-//
-// Zero is special: it's the only number that we can meaningfully compare or assign to a Quantity of
-// _any_ dimension.  Giving it a special type (and a predefined constant of that type, `ZERO`,
-// defined below) lets our code be both concise and readable.
-//
-// For example, we can zero-initialize any arbitrary Quantity, even if it doesn't have a
-// user-defined literal, and even if it's in a header file so we couldn't use the literals anyway:
-//
-//   struct PathPoint {
-//       QuantityD<RadiansPerMeter> curvature = ZERO;
-//   };
-struct Zero {
-    // Implicit conversion to arithmetic types.
-    template <typename T, typename Enable = std::enable_if_t<std::is_arithmetic<T>::value>>
-    constexpr operator T() const {
-        return 0;
-    }
+struct Zero;
 
-    // Implicit conversion to chrono durations.
-    template <typename Rep, typename Period>
-    constexpr operator std::chrono::duration<Rep, Period>() const {
-        return std::chrono::duration<Rep, Period>{0};
-    }
-};
+template <typename... BPs>
+struct Dimension;
 
-// A value of Zero.
+template <typename... BPs>
+struct Magnitude;
+
+template <typename UnitT>
+struct QuantityMaker;
+
+template <typename Unit>
+struct SingularNameFor;
+
+template <typename UnitT>
+struct QuantityPointMaker;
+
+template <typename UnitT, typename RepT>
+class Quantity;
+
 //
-// This exists purely for convenience, so people don't have to call the initializer.  i.e., it lets
-// us write `ZERO` instead of `Zero{}`.
-static constexpr auto ZERO = Zero{};
+// Quantity aliases to set a particular Rep.
+//
+// This presents a less cumbersome interface for end users.
+//
+template <typename UnitT>
+using QuantityD = Quantity<UnitT, double>;
+template <typename UnitT>
+using QuantityF = Quantity<UnitT, float>;
+template <typename UnitT>
+using QuantityI = Quantity<UnitT, int>;
+template <typename UnitT>
+using QuantityU = Quantity<UnitT, unsigned int>;
+template <typename UnitT>
+using QuantityI32 = Quantity<UnitT, int32_t>;
+template <typename UnitT>
+using QuantityU32 = Quantity<UnitT, uint32_t>;
+template <typename UnitT>
+using QuantityI64 = Quantity<UnitT, int64_t>;
+template <typename UnitT>
+using QuantityU64 = Quantity<UnitT, uint64_t>;
 
-// Addition, subtraction, and comparison of Zero are well defined.
-inline constexpr Zero operator+(Zero, Zero) { return ZERO; }
-inline constexpr Zero operator-(Zero, Zero) { return ZERO; }
-inline constexpr bool operator==(Zero, Zero) { return true; }
-inline constexpr bool operator>=(Zero, Zero) { return true; }
-inline constexpr bool operator<=(Zero, Zero) { return true; }
-inline constexpr bool operator!=(Zero, Zero) { return false; }
-inline constexpr bool operator>(Zero, Zero) { return false; }
-inline constexpr bool operator<(Zero, Zero) { return false; }
+template <typename T>
+struct CorrespondingQuantity;
+
+template <typename UnitT, typename RepT>
+class QuantityPoint;
+
+//
+// QuantityPoint aliases to set a particular Rep.
+//
+// This presents a less cumbersome interface for end users.
+//
+template <typename UnitT>
+using QuantityPointD = QuantityPoint<UnitT, double>;
+template <typename UnitT>
+using QuantityPointF = QuantityPoint<UnitT, float>;
+template <typename UnitT>
+using QuantityPointI = QuantityPoint<UnitT, int>;
+template <typename UnitT>
+using QuantityPointU = QuantityPoint<UnitT, unsigned int>;
+template <typename UnitT>
+using QuantityPointI32 = QuantityPoint<UnitT, int32_t>;
+template <typename UnitT>
+using QuantityPointU32 = QuantityPoint<UnitT, uint32_t>;
+template <typename UnitT>
+using QuantityPointI64 = QuantityPoint<UnitT, int64_t>;
+template <typename UnitT>
+using QuantityPointU64 = QuantityPoint<UnitT, uint64_t>;
+
+template <typename Unit>
+struct Constant;
+
+template <typename Unit>
+struct SymbolFor;
+
+template <template <class U> class Prefix>
+struct PrefixApplier;
+
+// SI Prefixes.
+template <typename U>
+struct Quetta;
+template <typename U>
+struct Ronna;
+template <typename U>
+struct Yotta;
+template <typename U>
+struct Zetta;
+template <typename U>
+struct Exa;
+template <typename U>
+struct Peta;
+template <typename U>
+struct Tera;
+template <typename U>
+struct Giga;
+template <typename U>
+struct Mega;
+template <typename U>
+struct Kilo;
+template <typename U>
+struct Hecto;
+template <typename U>
+struct Deka;
+template <typename U>
+struct Deci;
+template <typename U>
+struct Centi;
+template <typename U>
+struct Milli;
+template <typename U>
+struct Micro;
+template <typename U>
+struct Nano;
+template <typename U>
+struct Pico;
+template <typename U>
+struct Femto;
+template <typename U>
+struct Atto;
+template <typename U>
+struct Zepto;
+template <typename U>
+struct Yocto;
+template <typename U>
+struct Ronto;
+template <typename U>
+struct Quecto;
+
+// Binary Prefixes.
+template <typename U>
+struct Yobi;
+template <typename U>
+struct Zebi;
+template <typename U>
+struct Exbi;
+template <typename U>
+struct Pebi;
+template <typename U>
+struct Tebi;
+template <typename U>
+struct Gibi;
+template <typename U>
+struct Mebi;
+template <typename U>
+struct Kibi;
 
 }  // namespace au
 
@@ -682,14 +787,6 @@ struct IsQuotientValidRep;
 // Implementation details below.
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-// Forward declarations for main Au container types.
-template <typename U, typename R>
-class Quantity;
-template <typename U, typename R>
-class QuantityPoint;
-template <typename T>
-struct CorrespondingQuantity;
-
 namespace detail {
 template <typename T>
 struct IsAuType : std::false_type {};
@@ -874,6 +971,126 @@ constexpr auto minus = Minus{};
 }  // namespace detail
 }  // namespace au
 
+namespace au {
+
+struct Unos;
+
+}  // namespace au
+
+namespace au {
+
+struct Bits;
+
+}  // namespace au
+
+namespace au {
+
+struct Radians;
+
+}  // namespace au
+
+namespace au {
+
+struct Candelas;
+
+}  // namespace au
+
+namespace au {
+
+struct Moles;
+
+}  // namespace au
+
+namespace au {
+
+struct Amperes;
+
+}  // namespace au
+
+namespace au {
+
+struct Kelvins;
+
+}  // namespace au
+
+namespace au {
+
+struct Grams;
+
+}  // namespace au
+
+namespace au {
+
+struct Seconds;
+
+}  // namespace au
+
+namespace au {
+
+struct Meters;
+
+}  // namespace au
+
+namespace au {
+
+struct Minutes;
+
+}  // namespace au
+
+namespace au {
+
+struct Hours;
+
+}  // namespace au
+
+
+
+namespace au {
+
+// A type representing a quantity of "zero" in any units.
+//
+// Zero is special: it's the only number that we can meaningfully compare or assign to a Quantity of
+// _any_ dimension.  Giving it a special type (and a predefined constant of that type, `ZERO`,
+// defined below) lets our code be both concise and readable.
+//
+// For example, we can zero-initialize any arbitrary Quantity, even if it doesn't have a
+// user-defined literal, and even if it's in a header file so we couldn't use the literals anyway:
+//
+//   struct PathPoint {
+//       QuantityD<RadiansPerMeter> curvature = ZERO;
+//   };
+struct Zero {
+    // Implicit conversion to arithmetic types.
+    template <typename T, typename Enable = std::enable_if_t<std::is_arithmetic<T>::value>>
+    constexpr operator T() const {
+        return 0;
+    }
+
+    // Implicit conversion to chrono durations.
+    template <typename Rep, typename Period>
+    constexpr operator std::chrono::duration<Rep, Period>() const {
+        return std::chrono::duration<Rep, Period>{0};
+    }
+};
+
+// A value of Zero.
+//
+// This exists purely for convenience, so people don't have to call the initializer.  i.e., it lets
+// us write `ZERO` instead of `Zero{}`.
+static constexpr auto ZERO = Zero{};
+
+// Addition, subtraction, and comparison of Zero are well defined.
+inline constexpr Zero operator+(Zero, Zero) { return ZERO; }
+inline constexpr Zero operator-(Zero, Zero) { return ZERO; }
+inline constexpr bool operator==(Zero, Zero) { return true; }
+inline constexpr bool operator>=(Zero, Zero) { return true; }
+inline constexpr bool operator<=(Zero, Zero) { return true; }
+inline constexpr bool operator!=(Zero, Zero) { return false; }
+inline constexpr bool operator>(Zero, Zero) { return false; }
+inline constexpr bool operator<(Zero, Zero) { return false; }
+
+}  // namespace au
+
 
 
 namespace au {
@@ -883,6 +1100,11 @@ template <typename PackT, typename T>
 struct Prepend;
 template <typename PackT, typename T>
 using PrependT = typename Prepend<PackT, T>::type;
+
+template <typename T, typename Pack>
+struct DropAllImpl;
+template <typename T, typename Pack>
+using DropAll = typename DropAllImpl<T, Pack>::type;
 
 template <typename T, typename U>
 struct SameTypeIgnoringCvref : std::is_same<stdx::remove_cvref_t<T>, stdx::remove_cvref_t<U>> {};
@@ -897,11 +1119,29 @@ struct AlwaysFalse : std::false_type {};
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Implementation details below.
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// `Prepend` implementation.
 
 template <template <typename...> class Pack, typename T, typename... Us>
 struct Prepend<Pack<Us...>, T> {
     using type = Pack<T, Us...>;
 };
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// `DropAll` implementation.
+
+// Base case.
+template <typename T, template <class...> class Pack>
+struct DropAllImpl<T, Pack<>> : stdx::type_identity<Pack<>> {};
+
+// Recursive case:
+template <typename T, template <class...> class Pack, typename H, typename... Ts>
+struct DropAllImpl<T, Pack<H, Ts...>>
+    : std::conditional<std::is_same<T, H>::value,
+                       DropAll<T, Pack<Ts...>>,
+                       detail::PrependT<DropAll<T, Pack<Ts...>>, H>> {};
 
 }  // namespace detail
 }  // namespace au
@@ -2952,10 +3192,59 @@ struct FirstMatchingUnit<Matcher, TargetUnit, List<H, Ts...>>
                          stdx::type_identity<H>,
                          FirstMatchingUnit<Matcher, TargetUnit, List<Ts...>>> {};
 
+// A "redundant" unit, among a list of units, is one that is an exact integer multiple of another.
+//
+// If two units are identical, then each is redundant with the other.
+//
+// If two units are distinct, but quantity-equivalent, then the unit that comes later in the
+// standard unit ordering (i.e., `InOrderFor<Pack, ...>`) is the redundant one.
+template <typename Pack>
+struct EliminateRedundantUnitsImpl;
+template <typename Pack>
+using EliminateRedundantUnits = typename EliminateRedundantUnitsImpl<Pack>::type;
+
+// Base case: no units to eliminate.
+template <template <class...> class Pack>
+struct EliminateRedundantUnitsImpl<Pack<>> : stdx::type_identity<Pack<>> {};
+
+// Helper for recursive case.
+template <template <class...> class Pack, typename U1, typename U2>
+struct IsFirstUnitRedundant
+    : std::conditional_t<std::is_same<U1, U2>::value,
+                         std::true_type,
+                         std::conditional_t<AreUnitsQuantityEquivalent<U1, U2>::value,
+                                            InOrderFor<Pack, U2, U1>,
+                                            IsInteger<UnitRatioT<U1, U2>>>> {};
+
+// Recursive case: eliminate first unit if it is redundant; else, keep it and eliminate any later
+// units that are redundant with it.
+template <template <class...> class Pack, typename H, typename... Ts>
+struct EliminateRedundantUnitsImpl<Pack<H, Ts...>>
+    : std::conditional<
+
+          // If `H` is redundant with _any later unit_, simply omit it.
+          stdx::disjunction<IsFirstUnitRedundant<Pack, H, Ts>...>::value,
+          EliminateRedundantUnits<Pack<Ts...>>,
+
+          // Otherwise, we know we'll need to keep `H`, so we prepend it to the remaining result.
+          //
+          // To get that result, we first replace any units _that `H` makes redundant_ with `void`.
+          // Then, we drop all `void`, before finally recursively eliminating any units that are
+          // redundant among those that remain.
+          PrependT<
+              EliminateRedundantUnits<DropAll<
+                  void,
+
+                  // `Pack<Ts...>`, but with redundant-with-`H` units replaced by `void`:
+                  Pack<std::conditional_t<IsFirstUnitRedundant<Pack, Ts, H>::value, void, Ts>...>>>,
+
+              H>> {};
+
 }  // namespace detail
 
 template <typename... Us>
-using ComputeCommonUnitImpl = FlatDedupedTypeListT<CommonUnit, Us...>;
+using ComputeCommonUnitImpl =
+    detail::EliminateRedundantUnits<FlatDedupedTypeListT<CommonUnit, Us...>>;
 
 template <typename... Us>
 struct ComputeCommonUnit
@@ -3628,12 +3917,6 @@ constexpr T apply_magnitude(const T &x, Magnitude<BPs...>) {
 
 namespace au {
 
-template <typename UnitT>
-struct QuantityMaker;
-
-template <typename UnitT, typename RepT>
-class Quantity;
-
 //
 // Make a Quantity of the given Unit, which has this value as measured in the Unit.
 //
@@ -4063,33 +4346,6 @@ constexpr auto rep_cast(Zero z) {
     return z;
 }
 
-//
-// Quantity aliases to set a particular Rep.
-//
-// This presents a less cumbersome interface for end users.
-//
-template <typename UnitT>
-using QuantityD = Quantity<UnitT, double>;
-template <typename UnitT>
-using QuantityF = Quantity<UnitT, float>;
-template <typename UnitT>
-using QuantityI = Quantity<UnitT, int>;
-template <typename UnitT>
-using QuantityU = Quantity<UnitT, unsigned int>;
-template <typename UnitT>
-using QuantityI32 = Quantity<UnitT, int32_t>;
-template <typename UnitT>
-using QuantityU32 = Quantity<UnitT, uint32_t>;
-template <typename UnitT>
-using QuantityI64 = Quantity<UnitT, int64_t>;
-template <typename UnitT>
-using QuantityU64 = Quantity<UnitT, uint64_t>;
-
-// Forward declare `QuantityPoint` here, so that we can give better error messages when users try to
-// make it into a quantity.
-template <typename U, typename R>
-class QuantityPoint;
-
 template <typename UnitT>
 struct QuantityMaker {
     using Unit = UnitT;
@@ -4345,6 +4601,8 @@ struct common_type<au::Quantity<U1, R1>, au::Quantity<U2, R2>>
     : au::CommonQuantity<au::Quantity<U1, R1>, au::Quantity<U2, R2>> {};
 }  // namespace std
 
+// Keep corresponding `_fwd.hh` file on top.
+
 
 namespace au {
 
@@ -4583,11 +4841,6 @@ namespace au {
 // _absolute temperature measurements_ (e.g., `QuantityPoint<Celsius, T>`).  This type is also
 // analogous to `std::chrono::time_point`, in the same way that `Quantity` is analogous to
 // `std::chrono::duration`.
-template <typename UnitT, typename RepT>
-class QuantityPoint;
-
-template <typename UnitT>
-struct QuantityPointMaker;
 
 // Make a Quantity of the given Unit, which has this value as measured in the Unit.
 template <typename UnitT, typename T>
@@ -4878,28 +5131,6 @@ constexpr auto rep_cast(QuantityPoint<Unit, Rep> q) {
     return q.template as<NewRep>(Unit{});
 }
 
-//
-// QuantityPoint aliases to set a particular Rep.
-//
-// This presents a less cumbersome interface for end users.
-//
-template <typename UnitT>
-using QuantityPointD = QuantityPoint<UnitT, double>;
-template <typename UnitT>
-using QuantityPointF = QuantityPoint<UnitT, float>;
-template <typename UnitT>
-using QuantityPointI = QuantityPoint<UnitT, int>;
-template <typename UnitT>
-using QuantityPointU = QuantityPoint<UnitT, unsigned int>;
-template <typename UnitT>
-using QuantityPointI32 = QuantityPoint<UnitT, int32_t>;
-template <typename UnitT>
-using QuantityPointU32 = QuantityPoint<UnitT, uint32_t>;
-template <typename UnitT>
-using QuantityPointI64 = QuantityPoint<UnitT, int64_t>;
-template <typename UnitT>
-using QuantityPointU64 = QuantityPoint<UnitT, uint64_t>;
-
 namespace detail {
 template <typename X, typename Y, typename Func>
 constexpr auto using_common_point_unit(X x, Y y, Func f) {
@@ -5053,6 +5284,8 @@ struct AssociatedUnit<SymbolFor<U>> : stdx::type_identity<U> {};
 
 }  // namespace au
 
+// Keep corresponding `_fwd.hh` file on top.
+
 
 namespace au {
 
@@ -5074,6 +5307,8 @@ namespace symbols {
 constexpr auto rad = SymbolFor<Radians>{};
 }
 }  // namespace au
+
+// Keep corresponding `_fwd.hh` file on top.
 
 
 namespace au {
@@ -5097,6 +5332,8 @@ constexpr auto cd = SymbolFor<Candelas>{};
 }
 }  // namespace au
 
+// Keep corresponding `_fwd.hh` file on top.
+
 
 namespace au {
 
@@ -5118,6 +5355,8 @@ namespace symbols {
 constexpr auto mol = SymbolFor<Moles>{};
 }
 }  // namespace au
+
+// Keep corresponding `_fwd.hh` file on top.
 
 
 namespace au {
@@ -5142,6 +5381,8 @@ constexpr auto A = SymbolFor<Amperes>{};
 
 }  // namespace au
 
+// Keep corresponding `_fwd.hh` file on top.
+
 
 namespace au {
 
@@ -5165,6 +5406,8 @@ constexpr auto K = SymbolFor<Kelvins>{};
 }
 }  // namespace au
 
+// Keep corresponding `_fwd.hh` file on top.
+
 
 namespace au {
 
@@ -5187,6 +5430,8 @@ constexpr auto g = SymbolFor<Grams>{};
 }
 }  // namespace au
 
+// Keep corresponding `_fwd.hh` file on top.
+
 
 namespace au {
 
@@ -5208,6 +5453,8 @@ namespace symbols {
 constexpr auto s = SymbolFor<Seconds>{};
 }
 }  // namespace au
+
+// Keep corresponding `_fwd.hh` file on top.
 
 
 namespace au {
@@ -5627,6 +5874,8 @@ struct AssociatedUnit<Constant<Unit>> : stdx::type_identity<Unit> {};
 
 }  // namespace au
 
+// Keep corresponding `_fwd.hh` file on top.
+
 
 namespace au {
 
@@ -5648,6 +5897,8 @@ namespace symbols {
 constexpr auto min = SymbolFor<Minutes>{};
 }
 }  // namespace au
+
+// Keep corresponding `_fwd.hh` file on top.
 
 
 namespace au {
@@ -5701,6 +5952,8 @@ inline std::ostream &operator<<(std::ostream &out, Zero) {
 }
 
 }  // namespace au
+
+// Keep corresponding `_fwd.hh` file on top.
 
 
 namespace au {
