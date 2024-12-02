@@ -24,7 +24,7 @@
 #include <type_traits>
 #include <utility>
 
-// Version identifier: 0.3.5-41-g28a7d8c
+// Version identifier: 0.3.5-45-g437804f
 // <iostream> support: EXCLUDED
 // List of included units:
 //   amperes
@@ -37,6 +37,7 @@
 //   radians
 //   seconds
 //   unos
+// List of included constants:
 
 
 namespace au {
@@ -3521,16 +3522,28 @@ constexpr auto associated_unit_for_points(U) {
 // will not cause any performance problems, because these should all be empty classes anyway.  If we
 // find out we're mistaken, we'll need to revisit this idea.
 template <typename Unit, typename ScaleFactor>
+struct ScaledUnit;
+
+template <typename Unit, typename ScaleFactor>
+struct ComputeScaledUnitImpl : stdx::type_identity<ScaledUnit<Unit, ScaleFactor>> {};
+template <typename Unit, typename ScaleFactor>
+using ComputeScaledUnit = typename ComputeScaledUnitImpl<Unit, ScaleFactor>::type;
+template <typename Unit, typename ScaleFactor, typename OldScaleFactor>
+struct ComputeScaledUnitImpl<ScaledUnit<Unit, OldScaleFactor>, ScaleFactor>
+    : ComputeScaledUnitImpl<Unit, MagProductT<OldScaleFactor, ScaleFactor>> {};
+template <typename Unit>
+struct ComputeScaledUnitImpl<Unit, Magnitude<>> : stdx::type_identity<Unit> {};
+// Disambiguating specialization:
+template <typename Unit, typename OldScaleFactor>
+struct ComputeScaledUnitImpl<ScaledUnit<Unit, OldScaleFactor>, Magnitude<>>
+    : stdx::type_identity<ScaledUnit<Unit, OldScaleFactor>> {};
+
+template <typename Unit, typename ScaleFactor>
 struct ScaledUnit : Unit {
     static_assert(IsValidPack<Magnitude, ScaleFactor>::value,
                   "Can only scale by a Magnitude<...> type");
     using Dim = detail::DimT<Unit>;
     using Mag = MagProductT<detail::MagT<Unit>, ScaleFactor>;
-
-    // We must ensure we don't give this unit the same label as the unscaled version!
-    //
-    // Later on, we could try generating a new label by "pretty printing" the scale factor.
-    static constexpr auto &label = DefaultUnitLabel<void>::value;
 };
 
 // Type template to hold the product of powers of Units.
@@ -3567,13 +3580,13 @@ using UnitQuotientT = UnitProductT<U1, UnitInverseT<U2>>;
 
 // Scale this Unit by multiplying by a Magnitude.
 template <typename U, typename = std::enable_if_t<IsUnit<U>::value>, typename... BPs>
-constexpr ScaledUnit<U, Magnitude<BPs...>> operator*(U, Magnitude<BPs...>) {
+constexpr ComputeScaledUnit<U, Magnitude<BPs...>> operator*(U, Magnitude<BPs...>) {
     return {};
 }
 
 // Scale this Unit by dividing by a Magnitude.
 template <typename U, typename = std::enable_if_t<IsUnit<U>::value>, typename... BPs>
-constexpr ScaledUnit<U, MagInverseT<Magnitude<BPs...>>> operator/(U, Magnitude<BPs...>) {
+constexpr ComputeScaledUnit<U, MagInverseT<Magnitude<BPs...>>> operator/(U, Magnitude<BPs...>) {
     return {};
 }
 
@@ -3828,7 +3841,31 @@ struct EliminateRedundantUnitsImpl<Pack<H, Ts...>>
 
               H>> {};
 
+template <typename U, typename... Us>
+struct AllUnitsQuantityEquivalent : stdx::conjunction<AreUnitsQuantityEquivalent<U, Us>...> {};
+
+template <typename... Us>
+struct CommonUnitLabelImpl {
+    static_assert(sizeof...(Us) > 1u, "Common unit label only makes sense for multiple units");
+    static_assert(AllUnitsQuantityEquivalent<Us...>::value,
+                  "Must pre-reduce units before constructing common-unit label");
+
+    using LabelT = ExtendedLabel<7u + 2u * (sizeof...(Us) - 1u), Us...>;
+    static constexpr LabelT value = concatenate("EQUIV{", join_by(", ", unit_label<Us>()...), "}");
+};
+template <typename... Us>
+constexpr typename CommonUnitLabelImpl<Us...>::LabelT CommonUnitLabelImpl<Us...>::value;
+
+template <typename U>
+struct CommonUnitLabelImpl<U> : UnitLabel<U> {};
+
 }  // namespace detail
+
+template <typename A, typename B>
+struct InOrderFor<detail::CommonUnitLabelImpl, A, B> : InOrderFor<UnitProduct, A, B> {};
+
+template <typename... Us>
+using CommonUnitLabel = FlatDedupedTypeListT<detail::CommonUnitLabelImpl, Us...>;
 
 template <typename... Us>
 using ComputeCommonUnitImpl =
@@ -4067,15 +4104,27 @@ struct UnitLabel<UnitProduct<Us...>>
                               detail::DenominatorPartT<UnitProduct<Us...>>,
                               void> {};
 
-// Implementation for CommonUnit: unite constituent labels.
-template <typename... Us>
-struct UnitLabel<CommonUnit<Us...>> {
-    using LabelT = detail::ExtendedLabel<5 + 2 * (sizeof...(Us) - 1), Us...>;
+// Implementation for ScaledUnit: scaling unit U by M gets label `"[M U]"`.
+template <typename U, typename M>
+struct UnitLabel<ScaledUnit<U, M>> {
+    using MagLab = MagnitudeLabel<M>;
+    using LabelT = detail::
+        ExtendedLabel<detail::parens_if<MagLab::has_exposed_slash>(MagLab::value).size() + 3u, U>;
     static constexpr LabelT value =
-        detail::concatenate("COM[", detail::join_by(", ", unit_label(Us{})...), "]");
+        detail::concatenate("[",
+                            detail::parens_if<MagLab::has_exposed_slash>(MagLab::value),
+                            " ",
+                            UnitLabel<U>::value,
+                            "]");
 };
+template <typename U, typename M>
+constexpr typename UnitLabel<ScaledUnit<U, M>>::LabelT UnitLabel<ScaledUnit<U, M>>::value;
+
+// Implementation for CommonUnit: give size in terms of each constituent unit.
 template <typename... Us>
-constexpr typename UnitLabel<CommonUnit<Us...>>::LabelT UnitLabel<CommonUnit<Us...>>::value;
+struct UnitLabel<CommonUnit<Us...>>
+    : CommonUnitLabel<decltype(Us{} *
+                               (detail::MagT<CommonUnit<Us...>>{} / detail::MagT<Us>{}))...> {};
 
 // Implementation for CommonPointUnit: unite constituent labels.
 template <typename... Us>
@@ -4104,6 +4153,20 @@ struct OrderByDim : InStandardPackOrder<DimT<A>, DimT<B>> {};
 
 template <typename A, typename B>
 struct OrderByMag : InStandardPackOrder<MagT<A>, MagT<B>> {};
+
+// Order by "scaledness" of scaled units.  This is always false unless BOTH are specializations of
+// the `ScaledUnit<U, M>` template.  If they are, we *assume* we would never call this unless both
+// `OrderByDim` and `OrderByMag` are tied.  Therefore, we go by the _scale factor itself_.
+template <typename A, typename B>
+struct OrderByScaledness : std::false_type {};
+template <typename A, typename B>
+struct OrderByScaleFactor : std::false_type {};
+template <typename U1, typename M1, typename U2, typename M2>
+struct OrderByScaleFactor<ScaledUnit<U1, M1>, ScaledUnit<U2, M2>> : InStandardPackOrder<M1, M2> {};
+
+template <typename U1, typename M1, typename U2, typename M2>
+struct OrderByScaledness<ScaledUnit<U1, M1>, ScaledUnit<U2, M2>>
+    : LexicographicTotalOrdering<ScaledUnit<U1, M1>, ScaledUnit<U2, M2>, OrderByScaleFactor> {};
 
 // OrderAsUnitProduct<A, B> can only be true if both A and B are unit products, _and_ they are in
 // the standard pack order for unit products.  This default case handles the usual case where either
@@ -4159,6 +4222,7 @@ struct InOrderFor<UnitProduct, A, B> : LexicographicTotalOrdering<A,
                                                                   detail::OrderByUnitAvoidance,
                                                                   detail::OrderByDim,
                                                                   detail::OrderByMag,
+                                                                  detail::OrderByScaleFactor,
                                                                   detail::OrderByOrigin,
                                                                   detail::OrderAsUnitProduct> {};
 
@@ -5000,6 +5064,20 @@ template <typename U1, typename R1, typename U2, typename R2>
 constexpr auto operator%(Quantity<U1, R1> q1, Quantity<U2, R2> q2) {
     using U = CommonUnitT<U1, U2>;
     return make_quantity<U>(q1.in(U{}) % q2.in(U{}));
+}
+
+// Callsite-readable way to convert a `Quantity` to a raw number.
+//
+// Only works for dimensionless `Quantities`; will return a compile-time error otherwise.
+//
+// Identity for non-`Quantity` types.
+template <typename U, typename R>
+constexpr R as_raw_number(Quantity<U, R> q) {
+    return q.as(UnitProductT<>{});
+}
+template <typename T>
+constexpr T as_raw_number(T x) {
+    return x;
 }
 
 // Type trait to detect whether two Quantity types are equivalent.
