@@ -25,7 +25,7 @@
 #include <type_traits>
 #include <utility>
 
-// Version identifier: 0.4.0-2-gd8cf816
+// Version identifier: 0.4.0-5-g8165cb6
 // <iostream> support: EXCLUDED
 // List of included units:
 //   amperes
@@ -3344,9 +3344,9 @@ constexpr T clamp_to_range_of(U x) {
 //
 
 template <typename... BPs>
-constexpr bool is_known_to_be_less_than_one(Magnitude<BPs...> m) {
+constexpr bool is_known_to_be_less_than_one(Magnitude<BPs...>) {
     using MagT = Magnitude<BPs...>;
-    static_assert(is_rational(m), "Magnitude must be rational");
+    static_assert(is_rational(MagT{}), "Magnitude must be rational");
 
     constexpr auto num_result = get_value_result<std::uintmax_t>(numerator(MagT{}));
     static_assert(num_result.outcome == MagRepresentationOutcome::OK,
@@ -3756,6 +3756,26 @@ constexpr auto associated_unit(U) {
 template <typename U>
 constexpr auto associated_unit_for_points(U) {
     return AssociatedUnitForPointsT<U>{};
+}
+
+template <typename... Us>
+constexpr auto common_unit(Us...) {
+    return CommonUnitT<AssociatedUnitT<Us>...>{};
+}
+
+template <typename... Us>
+constexpr auto common_point_unit(Us...) {
+    return CommonPointUnitT<AssociatedUnitForPointsT<Us>...>{};
+}
+
+template <template <class> class Utility, typename... Us>
+constexpr auto make_common(Utility<Us>...) {
+    return Utility<CommonUnitT<AssociatedUnitT<Us>...>>{};
+}
+
+template <template <class> class Utility, typename... Us>
+constexpr auto make_common_point(Utility<Us>...) {
+    return Utility<CommonPointUnitT<AssociatedUnitForPointsT<Us>...>>{};
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -6318,7 +6338,8 @@ struct Constant : detail::MakesQuantityFromNumber<Constant, Unit>,
     // Convert this constant to a Quantity of the given unit and rep.
     template <typename T, typename OtherUnit>
     constexpr auto as(OtherUnit u) const {
-        static_assert(can_store_value_in<T>(u), "Cannot represent constant in this unit/rep");
+        static_assert(can_store_value_in<T>(OtherUnit{}),
+                      "Cannot represent constant in this unit/rep");
         return coerce_as<T>(u);
     }
 
@@ -6331,7 +6352,8 @@ struct Constant : detail::MakesQuantityFromNumber<Constant, Unit>,
     // Get the value of this constant in the given unit and rep.
     template <typename T, typename OtherUnit>
     constexpr auto in(OtherUnit u) const {
-        static_assert(can_store_value_in<T>(u), "Cannot represent constant in this unit/rep");
+        static_assert(can_store_value_in<T>(OtherUnit{}),
+                      "Cannot represent constant in this unit/rep");
         return coerce_in<T>(u);
     }
 
@@ -7161,7 +7183,7 @@ constexpr auto inverse_in(TargetUnits target_units, Quantity<U, R> q) {
     constexpr auto UNITY = make_constant(UnitProductT<>{});
 
     static_assert(
-        UNITY.in<R>(associated_unit(target_units) * U{}) >= threshold ||
+        UNITY.in<R>(associated_unit(TargetUnits{}) * U{}) >= threshold ||
             std::is_floating_point<R>::value,
         "Dangerous inversion risking truncation to 0; must supply explicit Rep if truly desired");
 
