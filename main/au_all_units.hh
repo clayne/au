@@ -26,7 +26,7 @@
 #include <type_traits>
 #include <utility>
 
-// Version identifier: 0.4.1-36-g6e35f82
+// Version identifier: 0.4.1-43-gbbe0dfa
 // <iostream> support: INCLUDED
 // List of included units:
 //   amperes
@@ -368,6 +368,12 @@ constexpr bool same_type_ignoring_cvref(T, U) {
 template <typename... Ts>
 struct AlwaysFalse : std::false_type {};
 
+template <typename R1, typename R2>
+struct CommonTypeButPreserveIntSignednessImpl;
+template <typename R1, typename R2>
+using CommonTypeButPreserveIntSignedness =
+    typename CommonTypeButPreserveIntSignednessImpl<R1, R2>::type;
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Implementation details below.
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -432,6 +438,30 @@ struct DropAllImpl<T, Pack<H, Ts...>>
     : std::conditional<std::is_same<T, H>::value,
                        DropAll<T, Pack<Ts...>>,
                        detail::PrependT<DropAll<T, Pack<Ts...>>, H>> {};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// `CommonTypeButPreserveIntSignedness` implementation.
+
+// `CopySignednessIfIntType<X, T>` has a `type` member that is always `T`, unless `T` is an integral
+// type: in which case, it's the signed version of `T` if `X` is signed, and the unsigned version of
+// `T` if `X` is unsigned.
+template <typename SignednessSource, typename T, bool IsTIntegral>
+struct CopySignednessIfIntTypeHelper;
+template <typename SignednessSource, typename T>
+struct CopySignednessIfIntTypeHelper<SignednessSource, T, true>
+    : std::conditional<std::is_unsigned<SignednessSource>::value,
+                       std::make_unsigned_t<T>,
+                       std::make_signed_t<T>> {};
+template <typename SignednessSource, typename T>
+struct CopySignednessIfIntTypeHelper<SignednessSource, T, false> : stdx::type_identity<T> {};
+
+template <typename SignednessSource, typename T>
+struct CopySignednessIfIntType
+    : CopySignednessIfIntTypeHelper<SignednessSource, T, std::is_integral<T>::value> {};
+
+template <typename R1, typename R2>
+struct CommonTypeButPreserveIntSignednessImpl
+    : CopySignednessIfIntType<R1, std::common_type_t<R1, R2>> {};
 
 }  // namespace detail
 }  // namespace au
@@ -1347,17 +1377,22 @@ struct IsQuotientValidRep
 
 }  // namespace au
 
-// This file provides drop-in replacements for certain standard library function objects for
-// comparison and arithmetic: `std::less<void>`, `std::plus<void>`, etc.
+
+// This file provides alternatives to certain standard library function objects for comparison and
+// arithmetic: `std::less<void>`, `std::plus<void>`, etc.
 //
 // These are _not_ intended as _fully general_ replacements.  They are _only_ intended for certain
-// specific use cases in this library, where we can ensure certain preconditions are met before they
-// are called.  For example, these utilities don't handle comparing signed and unsigned integral
-// types, because we only ever use them in places where we've already explicitly cast our quantities
-// to the same Rep.
+// specific use cases in this library.  External user code should not use these utilities: their
+// contract is subject to change at any time to suit the needs of Au.
 //
-// There are two main reasons we rolled our own versions instead of just using the ones from the
-// standard library (as we had initially done).  First, the `<functional>` header is moderately
+// The biggest change is that these function objects produce mathematically correct results when
+// comparing built-in integral types with mixed signedness.  As a concrete example: in the C++
+// language, `-1 < 1u` is `false`, because the common type of the input types is `unsigned int`, and
+// the `int` input `-1` gets converted to a (very large) `unsigned int` value.  However, using these
+// types, `Lt{}(-1, 1u)` will correctly return `true`!
+//
+// There were two initial motivations to roll our own versions instead of just using the ones from
+// the standard library (as we had done earlier).  First, the `<functional>` header is moderately
 // expensive to include---using these alternatives could save 100 ms or more on every file.  Second,
 // certain compilers (such as the Green Hills compiler) struggle with the trailing return types in,
 // say, `std::less<void>::operator()`, but work correctly with our alternatives.
@@ -1365,62 +1400,138 @@ struct IsQuotientValidRep
 namespace au {
 namespace detail {
 
+// These tag types act as a kind of "compile time enum".
+struct CompareBuiltInIntegers {};
+struct DefaultComparison {};
+
+// `ComparisonCategory<T, U>` acts like a function which takes two _types_, and returns the correct
+// instance of the above "compile time enum".
+template <typename T, typename U>
+using ComparisonCategory =
+    std::conditional_t<stdx::conjunction<std::is_integral<T>, std::is_integral<U>>::value,
+                       CompareBuiltInIntegers,
+                       DefaultComparison>;
+
 //
 // Comparison operators.
 //
 
 struct Equal {
-    template <typename T>
-    constexpr bool operator()(const T &a, const T &b) const {
+    template <typename T, typename U>
+    constexpr bool operator()(const T &a, const U &b) const {
+        return op_impl(ComparisonCategory<T, U>{}, a, b);
+    }
+
+    template <typename T, typename U>
+    constexpr bool op_impl(DefaultComparison, const T &a, const U &b) const {
         return a == b;
+    }
+
+    template <typename T, typename U>
+    constexpr bool op_impl(CompareBuiltInIntegers, const T &a, const U &b) const {
+        return stdx::cmp_equal(a, b);
     }
 };
 constexpr auto equal = Equal{};
 
 struct NotEqual {
-    template <typename T>
-    constexpr bool operator()(const T &a, const T &b) const {
+    template <typename T, typename U>
+    constexpr bool operator()(const T &a, const U &b) const {
+        return op_impl(ComparisonCategory<T, U>{}, a, b);
+    }
+
+    template <typename T, typename U>
+    constexpr bool op_impl(DefaultComparison, const T &a, const U &b) const {
         return a != b;
+    }
+
+    template <typename T, typename U>
+    constexpr bool op_impl(CompareBuiltInIntegers, const T &a, const U &b) const {
+        return stdx::cmp_not_equal(a, b);
     }
 };
 constexpr auto not_equal = NotEqual{};
 
 struct Greater {
-    template <typename T>
-    constexpr bool operator()(const T &a, const T &b) const {
+    template <typename T, typename U>
+    constexpr bool operator()(const T &a, const U &b) const {
+        return op_impl(ComparisonCategory<T, U>{}, a, b);
+    }
+
+    template <typename T, typename U>
+    constexpr bool op_impl(DefaultComparison, const T &a, const U &b) const {
         return a > b;
+    }
+
+    template <typename T, typename U>
+    constexpr bool op_impl(CompareBuiltInIntegers, const T &a, const U &b) const {
+        return stdx::cmp_greater(a, b);
     }
 };
 constexpr auto greater = Greater{};
 
 struct Less {
-    template <typename T>
-    constexpr bool operator()(const T &a, const T &b) const {
+    template <typename T, typename U>
+    constexpr bool operator()(const T &a, const U &b) const {
+        return op_impl(ComparisonCategory<T, U>{}, a, b);
+    }
+
+    template <typename T, typename U>
+    constexpr bool op_impl(DefaultComparison, const T &a, const U &b) const {
         return a < b;
+    }
+
+    template <typename T, typename U>
+    constexpr bool op_impl(CompareBuiltInIntegers, const T &a, const U &b) const {
+        return stdx::cmp_less(a, b);
     }
 };
 constexpr auto less = Less{};
 
 struct GreaterEqual {
-    template <typename T>
-    constexpr bool operator()(const T &a, const T &b) const {
+    template <typename T, typename U>
+    constexpr bool operator()(const T &a, const U &b) const {
+        return op_impl(ComparisonCategory<T, U>{}, a, b);
+    }
+
+    template <typename T, typename U>
+    constexpr bool op_impl(DefaultComparison, const T &a, const U &b) const {
         return a >= b;
+    }
+
+    template <typename T, typename U>
+    constexpr bool op_impl(CompareBuiltInIntegers, const T &a, const U &b) const {
+        return stdx::cmp_greater_equal(a, b);
     }
 };
 constexpr auto greater_equal = GreaterEqual{};
 
 struct LessEqual {
-    template <typename T>
-    constexpr bool operator()(const T &a, const T &b) const {
+    template <typename T, typename U>
+    constexpr bool operator()(const T &a, const U &b) const {
+        return op_impl(ComparisonCategory<T, U>{}, a, b);
+    }
+
+    template <typename T, typename U>
+    constexpr bool op_impl(DefaultComparison, const T &a, const U &b) const {
         return a <= b;
+    }
+
+    template <typename T, typename U>
+    constexpr bool op_impl(CompareBuiltInIntegers, const T &a, const U &b) const {
+        return stdx::cmp_less_equal(a, b);
     }
 };
 constexpr auto less_equal = LessEqual{};
 
 #if defined(__cpp_impl_three_way_comparison) && __cpp_impl_three_way_comparison >= 201907L
 struct ThreeWayCompare {
-    template <typename T>
-    constexpr auto operator()(const T &a, const T &b) const {
+    template <typename T, typename U>
+    constexpr auto operator()(const T &a, const U &b) const {
+        // Note that we do not need special treatment for the case where `T` and `U` are both
+        // integral types, because the C++ language already prohibits narrowing conversions (such as
+        // `int` to `uint`) for `operator<=>`.  We can rely on this implicit warning to induce users
+        // to fix their code.
         return a <=> b;
     }
 };
@@ -3212,6 +3323,11 @@ template <typename MagT>
 using Abs = typename AbsImpl<MagT>::type;
 
 template <typename MagT>
+struct SignImpl;
+template <typename MagT>
+using Sign = typename SignImpl<MagT>::type;
+
+template <typename MagT>
 struct NumeratorImpl;
 template <typename MagT>
 using NumeratorT = typename NumeratorImpl<MagT>::type;
@@ -3300,6 +3416,11 @@ constexpr auto abs(Magnitude<BPs...>) {
     return Abs<Magnitude<BPs...>>{};
 }
 constexpr auto abs(Zero z) { return z; }
+
+template <typename... BPs>
+constexpr auto sign(Magnitude<BPs...>) {
+    return Sign<Magnitude<BPs...>>{};
+}
 
 template <typename... BPs>
 constexpr auto numerator(Magnitude<BPs...>) {
@@ -3407,6 +3528,15 @@ struct AbsImpl<Magnitude<BPs...>> : stdx::type_identity<Magnitude<BPs...>> {};
 
 template <>
 struct AbsImpl<Zero> : stdx::type_identity<Zero> {};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// `sign()` implementation.
+
+template <typename... BPs>
+struct SignImpl<Magnitude<BPs...>> : stdx::type_identity<Magnitude<>> {};
+
+template <typename... BPs>
+struct SignImpl<Magnitude<Negative, BPs...>> : stdx::type_identity<Magnitude<Negative>> {};
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // `numerator()` implementation.
@@ -4243,6 +4373,10 @@ struct UnitRatio : stdx::type_identity<MagQuotientT<detail::MagT<U1>, detail::Ma
 template <typename U1, typename U2>
 using UnitRatioT = typename UnitRatio<U1, U2>::type;
 
+// The sign of a unit: almost always `mag<1>()`, but `-mag<1>()` for "negative" units.
+template <typename U>
+using UnitSign = Sign<detail::MagT<U>>;
+
 template <typename U>
 struct AssociatedUnit : stdx::type_identity<U> {};
 template <typename U>
@@ -4344,6 +4478,12 @@ constexpr bool is_unitless_unit(U) {
 // Useful in doing unit conversions.
 template <typename U1, typename U2>
 constexpr UnitRatioT<AssociatedUnitT<U1>, AssociatedUnitT<U2>> unit_ratio(U1, U2) {
+    return {};
+}
+
+// Type trait for the sign of a Unit (represented as a Magnitude).
+template <typename U>
+constexpr UnitSign<AssociatedUnitT<U>> unit_sign(U) {
     return {};
 }
 
@@ -5703,13 +5843,11 @@ constexpr T as_raw_number(T x) {
 }
 
 namespace detail {
-enum class UnitSign {
-    POSITIVE,
-    NEGATIVE,
-};
-
-template <typename Rep, UnitSign>
-struct CompareUnderlyingValues;
+// We implement `Quantity` comparisons by converting to a common unit, and comparing the values
+// stored in the underlying Rep types.  This means we need to know the _sign_ of that common unit,
+// so we can know which order to pass those underlying values (it gets reversed for negative units).
+template <typename SignMag, typename Op>
+struct SignAwareComparison;
 }  // namespace detail
 
 template <typename UnitT, typename RepT>
@@ -5718,18 +5856,17 @@ class Quantity {
     using EnableIfImplicitOkIs = std::enable_if_t<
         ImplicitOk ==
         ConstructionPolicy<UnitT, RepT>::template PermitImplicitFrom<OtherUnit, OtherRep>::value>;
-    using Vals = detail::CompareUnderlyingValues<RepT,
-                                                 (IsPositive<detail::MagT<UnitT>>::value
-                                                      ? detail::UnitSign::POSITIVE
-                                                      : detail::UnitSign::NEGATIVE)>;
+
+    // We could consider making this public someday, if we had a use case.
+    using Sign = UnitSign<UnitT>;
 
     // Not strictly necessary, but we want to keep each comparator implementation to one line.
-    using Eq = detail::Equal;
-    using Ne = detail::NotEqual;
-    using Lt = detail::Less;
-    using Le = detail::LessEqual;
-    using Gt = detail::Greater;
-    using Ge = detail::GreaterEqual;
+    using Eq = detail::SignAwareComparison<Sign, detail::Equal>;
+    using Ne = detail::SignAwareComparison<Sign, detail::NotEqual>;
+    using Lt = detail::SignAwareComparison<Sign, detail::Less>;
+    using Le = detail::SignAwareComparison<Sign, detail::LessEqual>;
+    using Gt = detail::SignAwareComparison<Sign, detail::Greater>;
+    using Ge = detail::SignAwareComparison<Sign, detail::GreaterEqual>;
 
  public:
     using Rep = RepT;
@@ -5871,16 +6008,16 @@ class Quantity {
     friend struct QuantityMaker<UnitT>;
 
     // Comparison operators.
-    friend constexpr bool operator==(Quantity a, Quantity b) { return Vals::cmp(a, b, Eq{}); }
-    friend constexpr bool operator!=(Quantity a, Quantity b) { return Vals::cmp(a, b, Ne{}); }
-    friend constexpr bool operator<(Quantity a, Quantity b) { return Vals::cmp(a, b, Lt{}); }
-    friend constexpr bool operator<=(Quantity a, Quantity b) { return Vals::cmp(a, b, Le{}); }
-    friend constexpr bool operator>(Quantity a, Quantity b) { return Vals::cmp(a, b, Gt{}); }
-    friend constexpr bool operator>=(Quantity a, Quantity b) { return Vals::cmp(a, b, Ge{}); }
+    friend constexpr bool operator==(Quantity a, Quantity b) { return Eq{}(a.value_, b.value_); }
+    friend constexpr bool operator!=(Quantity a, Quantity b) { return Ne{}(a.value_, b.value_); }
+    friend constexpr bool operator<(Quantity a, Quantity b) { return Lt{}(a.value_, b.value_); }
+    friend constexpr bool operator<=(Quantity a, Quantity b) { return Le{}(a.value_, b.value_); }
+    friend constexpr bool operator>(Quantity a, Quantity b) { return Gt{}(a.value_, b.value_); }
+    friend constexpr bool operator>=(Quantity a, Quantity b) { return Ge{}(a.value_, b.value_); }
 
 #if defined(__cpp_impl_three_way_comparison) && __cpp_impl_three_way_comparison >= 201907L
-    using Twc = detail::ThreeWayCompare;
-    friend constexpr auto operator<=>(Quantity a, Quantity b) { return Vals::cmp(a, b, Twc{}); }
+    using Twc = detail::SignAwareComparison<Sign, detail::ThreeWayCompare>;
+    friend constexpr auto operator<=>(Quantity a, Quantity b) { return Twc{}(a.value_, b.value_); }
 #endif
 
     // Addition and subtraction for like quantities.
@@ -6352,32 +6489,41 @@ constexpr auto using_common_type(T t, U u, Func f) {
 
     return f(cast_to_common_type<C>(t), cast_to_common_type<C>(u));
 }
+
+template <typename Op, typename U1, typename U2, typename R1, typename R2>
+constexpr auto convert_and_compare(Quantity<U1, R1> q1, Quantity<U2, R2> q2) {
+    using U = CommonUnitT<U1, U2>;
+    using ComRep1 = detail::CommonTypeButPreserveIntSignedness<R1, R2>;
+    using ComRep2 = detail::CommonTypeButPreserveIntSignedness<R2, R1>;
+    return detail::SignAwareComparison<UnitSign<U>, Op>{}(q1.template in<ComRep1>(U{}),
+                                                          q2.template in<ComRep2>(U{}));
+}
 }  // namespace detail
 
 // Comparison functions for compatible Quantity types.
 template <typename U1, typename U2, typename R1, typename R2>
 constexpr bool operator==(Quantity<U1, R1> q1, Quantity<U2, R2> q2) {
-    return detail::using_common_type(q1, q2, detail::equal);
+    return detail::convert_and_compare<detail::Equal>(q1, q2);
 }
 template <typename U1, typename U2, typename R1, typename R2>
 constexpr bool operator!=(Quantity<U1, R1> q1, Quantity<U2, R2> q2) {
-    return detail::using_common_type(q1, q2, detail::not_equal);
+    return detail::convert_and_compare<detail::NotEqual>(q1, q2);
 }
 template <typename U1, typename U2, typename R1, typename R2>
 constexpr bool operator<(Quantity<U1, R1> q1, Quantity<U2, R2> q2) {
-    return detail::using_common_type(q1, q2, detail::less);
+    return detail::convert_and_compare<detail::Less>(q1, q2);
 }
 template <typename U1, typename U2, typename R1, typename R2>
 constexpr bool operator<=(Quantity<U1, R1> q1, Quantity<U2, R2> q2) {
-    return detail::using_common_type(q1, q2, detail::less_equal);
+    return detail::convert_and_compare<detail::LessEqual>(q1, q2);
 }
 template <typename U1, typename U2, typename R1, typename R2>
 constexpr bool operator>(Quantity<U1, R1> q1, Quantity<U2, R2> q2) {
-    return detail::using_common_type(q1, q2, detail::greater);
+    return detail::convert_and_compare<detail::Greater>(q1, q2);
 }
 template <typename U1, typename U2, typename R1, typename R2>
 constexpr bool operator>=(Quantity<U1, R1> q1, Quantity<U2, R2> q2) {
-    return detail::using_common_type(q1, q2, detail::greater_equal);
+    return detail::convert_and_compare<detail::GreaterEqual>(q1, q2);
 }
 
 // Addition and subtraction functions for compatible Quantity types.
@@ -6459,19 +6605,19 @@ constexpr auto operator>=(QLike q1, Quantity<U, R> q2) -> decltype(as_quantity(q
 }
 
 namespace detail {
-template <typename Rep>
-struct CompareUnderlyingValues<Rep, UnitSign::POSITIVE> {
-    template <typename U, typename Comp>
-    static constexpr auto cmp(Quantity<U, Rep> lhs, Quantity<U, Rep> rhs, Comp comp) {
-        return comp(lhs.in(U{}), rhs.in(U{}));
+template <typename Op>
+struct SignAwareComparison<Magnitude<>, Op> {
+    template <typename T1, typename T2>
+    constexpr auto operator()(const T1 &lhs, const T2 &rhs) const {
+        return Op{}(lhs, rhs);
     }
 };
 
-template <typename Rep>
-struct CompareUnderlyingValues<Rep, UnitSign::NEGATIVE> {
-    template <typename U, typename Comp>
-    static constexpr auto cmp(Quantity<U, Rep> lhs, Quantity<U, Rep> rhs, Comp comp) {
-        return comp(rhs.in(U{}), lhs.in(U{}));
+template <typename Op>
+struct SignAwareComparison<Magnitude<Negative>, Op> {
+    template <typename T1, typename T2>
+    constexpr auto operator()(const T1 &lhs, const T2 &rhs) const {
+        return Op{}(rhs, lhs);
     }
 };
 }  // namespace detail
@@ -6479,7 +6625,7 @@ struct CompareUnderlyingValues<Rep, UnitSign::NEGATIVE> {
 #if defined(__cpp_impl_three_way_comparison) && __cpp_impl_three_way_comparison >= 201907L
 template <typename U1, typename R1, typename U2, typename R2>
 constexpr auto operator<=>(const Quantity<U1, R1> &lhs, const Quantity<U2, R2> &rhs) {
-    return detail::using_common_type(lhs, rhs, detail::ThreeWayCompare{});
+    return detail::convert_and_compare<detail::ThreeWayCompare>(lhs, rhs);
 }
 #endif
 
@@ -7203,32 +7349,41 @@ constexpr auto using_common_point_unit(X x, Y y, Func f) {
     constexpr auto u = CommonPointUnitT<typename X::Unit, typename Y::Unit>{};
     return f(rep_cast<R>(x).as(u), rep_cast<R>(y).as(u));
 }
+
+template <typename Op, typename U1, typename U2, typename R1, typename R2>
+constexpr auto convert_and_compare(QuantityPoint<U1, R1> p1, QuantityPoint<U2, R2> p2) {
+    using U = CommonPointUnitT<U1, U2>;
+    using ComRep1 = detail::CommonTypeButPreserveIntSignedness<R1, R2>;
+    using ComRep2 = detail::CommonTypeButPreserveIntSignedness<R2, R1>;
+    return detail::SignAwareComparison<UnitSign<U>, Op>{}(p1.template in<ComRep1>(U{}),
+                                                          p2.template in<ComRep2>(U{}));
+}
 }  // namespace detail
 
 // Comparison functions for compatible QuantityPoint types.
 template <typename U1, typename U2, typename R1, typename R2>
 constexpr auto operator<(QuantityPoint<U1, R1> p1, QuantityPoint<U2, R2> p2) {
-    return detail::using_common_point_unit(p1, p2, detail::less);
+    return detail::convert_and_compare<detail::Less>(p1, p2);
 }
 template <typename U1, typename U2, typename R1, typename R2>
 constexpr auto operator>(QuantityPoint<U1, R1> p1, QuantityPoint<U2, R2> p2) {
-    return detail::using_common_point_unit(p1, p2, detail::greater);
+    return detail::convert_and_compare<detail::Greater>(p1, p2);
 }
 template <typename U1, typename U2, typename R1, typename R2>
 constexpr auto operator<=(QuantityPoint<U1, R1> p1, QuantityPoint<U2, R2> p2) {
-    return detail::using_common_point_unit(p1, p2, detail::less_equal);
+    return detail::convert_and_compare<detail::LessEqual>(p1, p2);
 }
 template <typename U1, typename U2, typename R1, typename R2>
 constexpr auto operator>=(QuantityPoint<U1, R1> p1, QuantityPoint<U2, R2> p2) {
-    return detail::using_common_point_unit(p1, p2, detail::greater_equal);
+    return detail::convert_and_compare<detail::GreaterEqual>(p1, p2);
 }
 template <typename U1, typename U2, typename R1, typename R2>
 constexpr auto operator==(QuantityPoint<U1, R1> p1, QuantityPoint<U2, R2> p2) {
-    return detail::using_common_point_unit(p1, p2, detail::equal);
+    return detail::convert_and_compare<detail::Equal>(p1, p2);
 }
 template <typename U1, typename U2, typename R1, typename R2>
 constexpr auto operator!=(QuantityPoint<U1, R1> p1, QuantityPoint<U2, R2> p2) {
-    return detail::using_common_point_unit(p1, p2, detail::not_equal);
+    return detail::convert_and_compare<detail::NotEqual>(p1, p2);
 }
 
 namespace detail {
@@ -7273,8 +7428,7 @@ constexpr auto operator-(QuantityPoint<U1, R1> p1, QuantityPoint<U2, R2> p2) {
 #if defined(__cpp_impl_three_way_comparison) && __cpp_impl_three_way_comparison >= 201907L
 template <typename U1, typename R1, typename U2, typename R2>
 constexpr auto operator<=>(const QuantityPoint<U1, R1> &lhs, const QuantityPoint<U2, R2> &rhs) {
-    using U = CommonPointUnitT<U1, U2>;
-    return lhs.in(U{}) <=> rhs.in(U{});
+    return detail::convert_and_compare<detail::ThreeWayCompare>(lhs, rhs);
 }
 #endif
 
