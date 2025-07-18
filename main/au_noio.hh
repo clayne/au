@@ -25,7 +25,7 @@
 #include <type_traits>
 #include <utility>
 
-// Version identifier: 0.4.1-44-gc2bc7b5
+// Version identifier: 0.4.1-60-g30da24a
 // <iostream> support: EXCLUDED
 // List of included units:
 //   amperes
@@ -364,7 +364,7 @@ constexpr std::make_unsigned_t<S> abs_as_unsigned(S x) {
     constexpr auto UMAX = std::numeric_limits<U>::max();
 
     auto result = static_cast<U>(x);
-    return (result > SMAX) ? (UMAX - result + 1u) : result;
+    return (result > SMAX) ? static_cast<U>(UMAX - result + 1u) : result;
 }
 
 // The string-length needed to hold a representation of this unsigned integer.
@@ -1492,6 +1492,12 @@ inline constexpr bool operator!=(Zero, Zero) { return false; }
 inline constexpr bool operator>(Zero, Zero) { return false; }
 inline constexpr bool operator<(Zero, Zero) { return false; }
 
+// Implementation helper for "a type where value() returns 0".
+template <typename T>
+struct ValueOfZero {
+    static constexpr T value() { return ZERO; }
+};
+
 }  // namespace au
 
 
@@ -1514,6 +1520,11 @@ struct DropAllImpl;
 template <typename T, typename Pack>
 using DropAll = typename DropAllImpl<T, Pack>::type;
 
+template <template <class...> class Pack, typename... Ts>
+struct FlattenAsImpl;
+template <template <class...> class Pack, typename... Ts>
+using FlattenAs = typename FlattenAsImpl<Pack, Ts...>::type;
+
 template <typename T, typename U>
 struct SameTypeIgnoringCvref : std::is_same<stdx::remove_cvref_t<T>, stdx::remove_cvref_t<U>> {};
 
@@ -1530,6 +1541,15 @@ struct CommonTypeButPreserveIntSignednessImpl;
 template <typename R1, typename R2>
 using CommonTypeButPreserveIntSignedness =
     typename CommonTypeButPreserveIntSignednessImpl<R1, R2>::type;
+
+//
+// `PromotedType<T>` is the result type for arithmetic operations involving `T`.  Of course, this is
+// normally just `T`, but integer promotion for small integral types can change this.
+//
+template <typename T>
+struct PromotedTypeImpl;
+template <typename T>
+using PromotedType = typename PromotedTypeImpl<T>::type;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Implementation details below.
@@ -1597,6 +1617,43 @@ struct DropAllImpl<T, Pack<H, Ts...>>
                        detail::PrependT<DropAll<T, Pack<Ts...>>, H>> {};
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
+// `FlattenAs` implementation.
+
+template <typename P1, typename P2>
+struct ConcatImpl;
+template <typename P1, typename P2>
+using Concat = typename ConcatImpl<P1, P2>::type;
+
+template <template <class...> class Pack, typename... T1s, typename... T2s>
+struct ConcatImpl<Pack<T1s...>, Pack<T2s...>> : stdx::type_identity<Pack<T1s..., T2s...>> {};
+
+template <template <class...> class Pack, typename ResultPack, typename... Ts>
+struct FlattenAsImplHelper;
+
+template <template <class...> class Pack, typename ResultPack>
+struct FlattenAsImplHelper<Pack, ResultPack> : stdx::type_identity<ResultPack> {};
+
+// Skip empty packs.
+template <template <class...> class Pack, typename ResultPack, typename... Us>
+struct FlattenAsImplHelper<Pack, ResultPack, Pack<>, Us...>
+    : FlattenAsImplHelper<Pack, ResultPack, Us...> {};
+
+template <template <class...> class Pack,
+          typename ResultPack,
+          typename T,
+          typename... Ts,
+          typename... Us>
+struct FlattenAsImplHelper<Pack, ResultPack, Pack<T, Ts...>, Us...>
+    : FlattenAsImplHelper<Pack, ResultPack, T, Pack<Ts...>, Us...> {};
+
+template <template <class...> class Pack, typename ResultPack, typename T, typename... Us>
+struct FlattenAsImplHelper<Pack, ResultPack, T, Us...>
+    : FlattenAsImplHelper<Pack, Concat<ResultPack, Pack<T>>, Us...> {};
+
+template <template <class...> class Pack, typename... Ts>
+struct FlattenAsImpl : FlattenAsImplHelper<Pack, Pack<>, Ts...> {};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
 // `CommonTypeButPreserveIntSignedness` implementation.
 
 // `CopySignednessIfIntType<X, T>` has a `type` member that is always `T`, unless `T` is an integral
@@ -1619,6 +1676,17 @@ struct CopySignednessIfIntType
 template <typename R1, typename R2>
 struct CommonTypeButPreserveIntSignednessImpl
     : CopySignednessIfIntType<R1, std::common_type_t<R1, R2>> {};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// `PromotedType<T>` implementation.
+
+template <typename T>
+struct PromotedTypeImpl {
+    using type = decltype(std::declval<T>() * std::declval<T>());
+
+    static_assert(std::is_same<type, typename PromotedTypeImpl<type>::type>::value,
+                  "We explicitly assume that promoted types are not again promotable");
+};
 
 }  // namespace detail
 }  // namespace au
@@ -3473,10 +3541,29 @@ constexpr MagRepresentationOrError<T> get_value_result(Magnitude<>) {
     return {MagRepresentationOutcome::OK, static_cast<T>(1)};
 }
 
+template <typename T, typename MagT, bool IsCandidate>
+struct IsExactlyLowestOfSignedIntegral : std::false_type {};
 template <typename T, typename... BPs>
-constexpr MagRepresentationOrError<T> get_value_result(Magnitude<Negative, BPs...>) {
+struct IsExactlyLowestOfSignedIntegral<T, Magnitude<Negative, BPs...>, true>
+    : std::is_same<
+          decltype(mag<static_cast<std::make_unsigned_t<T>>(std::numeric_limits<T>::max()) + 1u>()),
+          Magnitude<BPs...>> {};
+template <typename T, typename... BPs>
+constexpr bool is_exactly_lowest_of_signed_integral(Magnitude<BPs...>) {
+    return IsExactlyLowestOfSignedIntegral<
+        T,
+        Magnitude<BPs...>,
+        stdx::conjunction<std::is_integral<T>, std::is_signed<T>>::value>::value;
+}
+
+template <typename T, typename... BPs>
+constexpr MagRepresentationOrError<T> get_value_result(Magnitude<Negative, BPs...> m) {
     if (std::is_unsigned<T>::value) {
         return {MagRepresentationOutcome::ERR_NEGATIVE_NUMBER_IN_UNSIGNED_TYPE};
+    }
+
+    if (is_exactly_lowest_of_signed_integral<T>(m)) {
+        return {MagRepresentationOutcome::OK, std::numeric_limits<T>::lowest()};
     }
 
     const auto result = get_value_result<T>(Magnitude<BPs...>{});
@@ -3695,21 +3782,6 @@ namespace detail {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 //
-// `PromotedType<T>` is the result type for arithmetic operations involving `T`.  Of course, this is
-// normally just `T`, but integer promotion for small integral types can change this.
-//
-template <typename T>
-struct PromotedTypeImpl {
-    using type = decltype(std::declval<T>() * std::declval<T>());
-
-    static_assert(std::is_same<type, typename PromotedTypeImpl<type>::type>::value,
-                  "We explicitly assume that promoted types are not again promotable");
-};
-template <typename T>
-using PromotedType = typename PromotedTypeImpl<T>::type;
-
-////////////////////////////////////////////////////////////////////////////////////////////////////
-//
 // `clamp_to_range_of<T>(x)` returns `x` if it is in the range of `T`, and otherwise returns the
 // maximum value representable in `T` if `x` is too large, or the minimum value representable in `T`
 // if `x` is too small.
@@ -3772,12 +3844,6 @@ constexpr IsAbsMagLessThanOne is_abs_known_to_be_less_than_one(Magnitude<BPs...>
 //
 template <typename T, typename MagT, IsAbsMagLessThanOne>
 struct MaxNonOverflowingValueImplWhenNumFits;
-
-// Implementation helper for "a value of zero" (which recurs a bunch of times).
-template <typename T>
-struct ValueOfZero {
-    static constexpr T value() { return T{0}; }
-};
 
 // If `MagT` is less than 1, then we only need to check for the limiting value where the _numerator
 // multiplication step alone_ would overflow.
@@ -5571,11 +5637,18 @@ class Quantity {
               typename NewUnit,
               typename = std::enable_if_t<IsUnit<AssociatedUnitT<NewUnit>>::value>>
     constexpr auto as(NewUnit) const {
-        using Common = std::common_type_t<Rep, NewRep>;
+        constexpr bool REAL_TO_COMPLEX =
+            std::is_arithmetic<Rep>::value &&
+            stdx::experimental::is_detected<detail::TypeOfRealMember, NewRep>::value;
+        using Common = std::conditional_t<REAL_TO_COMPLEX,
+                                          std::common_type_t<Rep, detail::RealPart<NewRep>>,
+                                          std::common_type_t<Rep, NewRep>>;
+        using Intermediate = std::conditional_t<REAL_TO_COMPLEX, detail::RealPart<NewRep>, NewRep>;
         using Factor = UnitRatioT<AssociatedUnitT<Unit>, AssociatedUnitT<NewUnit>>;
 
         return make_quantity<AssociatedUnitT<NewUnit>>(
-            static_cast<NewRep>(detail::apply_magnitude(static_cast<Common>(value_), Factor{})));
+            static_cast<NewRep>(static_cast<Intermediate>(
+                detail::apply_magnitude(static_cast<Common>(value_), Factor{}))));
     }
 
     template <typename NewUnit,
